@@ -1,13 +1,14 @@
 import { serveFile } from "jsr:@std/http/file-server";
 
-// ===================== 配置(你在 Deno Deploy 后台设,我看不到)=====================
-// 不要写在这里!去 Deno Deploy 项目的 Settings → Environment Variables 添加这三个:
-//   SEED            你的秘密种子(登录码靠它派生,务必设,别留空)
-//   RESEND_API_KEY  Resend 的 re_xxx(不发邮件可不填)
-//   ADMIN_EMAIL     收登录码的邮箱(建议=Resend 注册邮箱)
+// ===================== 配置(在 Deno Deploy → Settings → Environment Variables 设)=====================
+//   SEED            你的秘密种子(登录码靠它派生,必填)
+//   RESEND_API_KEY  Resend 的 re_xxx(要发邮件就填)
+//   ADMIN_EMAIL     收件邮箱(建议=Resend 注册邮箱)
+//   MAIL_FROM       发件地址(可选;没验证自己域名前用默认 onboarding@resend.dev)
 const SEED = Deno.env.get("SEED") ?? "";
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") ?? "";
 const ADMIN_EMAIL = Deno.env.get("ADMIN_EMAIL") ?? "";
+const MAIL_FROM = Deno.env.get("MAIL_FROM") ?? "onboarding@resend.dev";
 
 // ===================== 路径 =====================
 const ADMIN_PATH = "/2718281828";      // e 前十位 = 管理后台
@@ -16,7 +17,7 @@ const FALLBACK_PATH = "/8281828172";   // 倒序 = 查当季码的兜底入口
 const kv = await Deno.openKv();
 
 // ===================== 工具 =====================
-const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去掉了易混字符 I/O/0/1
+const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 去掉易混字符 I/O/0/1
 
 function currentQuarter(d = new Date()): string {
   return `${d.getUTCFullYear()}-Q${Math.floor(d.getUTCMonth() / 3) + 1}`;
@@ -70,43 +71,80 @@ function redirect(location: string, extra: Record<string, string> = {}): Respons
   return new Response(null, { status: 303, headers: { Location: location, ...extra } });
 }
 
-// ===================== 换季自动发邮件(原子标记防重复)=====================
+// ===================== 发邮件 =====================
+// 返回 {ok, error}: ok=true 发送成功; 否则 error 为原因(用于页面提示)
+async function sendMail(subject: string, text: string): Promise<{ ok: boolean; error?: string }> {
+  if (!RESEND_API_KEY) return { ok: false, error: "未设置 RESEND_API_KEY" };
+  if (!ADMIN_EMAIL) return { ok: false, error: "未设置 ADMIN_EMAIL" };
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ from: MAIL_FROM, to: [ADMIN_EMAIL], subject, text }),
+    });
+    if (resp.ok) return { ok: true };
+    const body = await resp.text();
+    return { ok: false, error: `Resend ${resp.status}: ${body.slice(0, 300)}` };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+// 换季自动发新码(原子标记防重复)
 async function maybeSendQuarterEmail() {
   if (!SEED || !RESEND_API_KEY || !ADMIN_EMAIL) return;
   const q = currentQuarter();
   const flagKey = ["sent", q];
   if ((await kv.get(flagKey)).value) return;
-  // 原子抢占:只有第一个请求能 set 成功,从而只发一次
   const claim = await kv.atomic().check({ key: flagKey, versionstamp: null }).set(flagKey, true).commit();
-  if (!claim.ok) return;
+  if (!claim.ok) return; // 别的请求已抢先,只发一次
   const codes = await quarterCodes(SEED, q);
-  try {
-    await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        from: "onboarding@resend.dev", // 验证自己域名前用这个;之后可换成你的
-        to: [ADMIN_EMAIL],
-        subject: `订阅管理 - ${q} 登录码`,
-        text: `本季(${q})登录码,任一可登录后台:\n\n${codes.join("\n")}`,
-      }),
-    });
-  } catch (_) { /* 邮件失败不影响服务,可用兜底入口查码 */ }
+  await sendMail(`订阅管理 - ${q} 登录码`, `本季(${q})登录码,任一可登录后台:\n\n${codes.join("\n")}`);
 }
 
-// ===================== 页面 =====================
+// ===================== 样式 =====================
 const STYLE = `<style>
-  body{font-family:system-ui,sans-serif;max-width:880px;margin:32px auto;padding:0 16px;color:#222}
-  h2{margin-top:28px}.err{color:#c00}
-  input,textarea{font:inherit;padding:6px 8px;border:1px solid #ccc;border-radius:6px}
-  button{font:inherit;padding:6px 12px;border:0;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer}
-  button.danger{background:#dc2626}
-  table{border-collapse:collapse;width:100%;margin-top:12px}
-  td,th{border:1px solid #e5e5e5;padding:6px 8px;text-align:left;font-size:14px;vertical-align:top}
-  .url{font-family:monospace;font-size:12px;word-break:break-all}
-  .addform input{margin-right:6px}.box{max-width:360px}
+  :root{--bd:#e5e7eb;--fg:#1f2937;--muted:#6b7280;--blue:#2563eb;--red:#dc2626;--bg:#f9fafb}
+  *{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,sans-serif;max-width:920px;margin:32px auto;padding:0 16px;color:var(--fg);background:#fff}
+  h2{margin:28px 0 12px;font-size:18px}
+  .err{color:var(--red)}
+  .ok{color:#059669}
+  .notice{padding:10px 14px;border-radius:8px;margin:10px 0;font-size:14px}
+  .notice.good{background:#ecfdf5;color:#059669}
+  .notice.bad{background:#fef2f2;color:#b91c1c;word-break:break-all}
+  input,textarea{font:inherit;padding:8px 10px;border:1px solid var(--bd);border-radius:8px;outline:none}
+  input:focus,textarea:focus{border-color:var(--blue)}
+  button{font:inherit;font-size:13px;padding:6px 12px;border:1px solid transparent;border-radius:8px;background:var(--blue);color:#fff;cursor:pointer;transition:.15s;white-space:nowrap}
+  button:hover{filter:brightness(1.08)}
+  button.ghost{background:#fff;color:var(--fg);border-color:var(--bd)}
+  button.ghost:hover{background:var(--bg)}
+  button.danger{background:#fff;color:var(--red);border-color:#fecaca}
+  button.danger:hover{background:#fef2f2}
+  table{border-collapse:separate;border-spacing:0;width:100%;margin-top:8px;font-size:14px;border:1px solid var(--bd);border-radius:10px;overflow:hidden}
+  th{background:var(--bg);color:var(--muted);font-weight:600;text-align:left;padding:10px 12px;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+  td{border-top:1px solid var(--bd);padding:10px 12px;vertical-align:middle}
+  .url{font-family:ui-monospace,monospace;font-size:12px;color:var(--muted);word-break:break-all;max-width:280px}
+  .actions{display:flex;gap:6px;align-items:center;flex-wrap:nowrap}
+  .actions form{display:inline;margin:0}
+  .status{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px}
+  .status.on{background:#ecfdf5;color:#059669}.status.off{background:#fef2f2;color:#b91c1c}
+  .addform{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+  .addform input{flex:1;min-width:160px}
+  textarea{width:100%;font-family:ui-monospace,monospace;font-size:12px;line-height:1.5}
+  .box{max-width:360px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+  .qr-mask{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);align-items:center;justify-content:center;z-index:50}
+  .qr-mask.show{display:flex}
+  .qr-card{background:#fff;padding:24px;border-radius:16px;text-align:center;max-width:300px}
+  .qr-card #qrbox{margin:8px auto}
+  .qr-card p{font-size:12px;color:var(--muted);word-break:break-all;margin:12px 0 0}
 </style>`;
 
+// ===================== 页面 =====================
 function loginPage(msg = ""): string {
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${STYLE}
   <div class="box"><h2>管理登录</h2>${msg ? `<p class="err">${escapeHtml(msg)}</p>` : ""}
@@ -133,43 +171,68 @@ function dashboardPage(
   devices: Array<{ username: string; id: string; enabled: boolean; note?: string }>,
   nodes: string,
   origin: string,
+  notice = "",
 ): string {
- const rows = devices.map((d) => {
+  const rows = devices.map((d) => {
     const link = `${origin}/l/${encodeURIComponent(d.username)}/${d.id}`;
+    const j = JSON.stringify(link);
     return `<tr>
-    <td>${escapeHtml(d.username)}</td>
-    <td>${escapeHtml(d.note)}</td>
-    <td>${d.enabled ? "✅启用" : "⛔停用"}</td>
+    <td><strong>${escapeHtml(d.username)}</strong></td>
+    <td style="color:var(--muted)">${escapeHtml(d.note)}</td>
+    <td><span class="status ${d.enabled ? "on" : "off"}">${d.enabled ? "启用" : "停用"}</span></td>
     <td class="url">${link}</td>
-    <td>
-      <button type="button" onclick="copyLink('${link.replace(/'/g, "\\'")}', this)">复制</button>
-      <form method="post" style="display:inline"><input type="hidden" name="action" value="toggle"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button>${d.enabled ? "停用" : "启用"}</button></form>
-      <form method="post" style="display:inline" onsubmit="return confirm('确定删除 ${escapeHtml(d.username)} ?')"><input type="hidden" name="action" value="del"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="danger">删除</button></form>
-    </td></tr>`;
+    <td><div class="actions">
+      <button type="button" class="ghost" onclick='copyLink(${j},this)'>复制</button>
+      <button type="button" class="ghost" onclick='showQR(${j})'>二维码</button>
+      <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost">${d.enabled ? "停用" : "启用"}</button></form>
+      <form method="post" onsubmit="return confirm('删除 ${escapeHtml(d.username)} ?')"><input type="hidden" name="action" value="del"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="danger">删除</button></form>
+    </div></td></tr>`;
   }).join("");
+
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${STYLE}
+  ${notice}
   <h2>设备管理</h2>
   <form method="post" class="addform"><input type="hidden" name="action" value="add">
     <input name="username" placeholder="用户名(如 father-win)" required>
     <input name="note" placeholder="备注(可选)"><button>添加设备</button></form>
-  <table><tr><th>用户名</th><th>备注</th><th>状态</th><th>订阅链接(发给家人)</th><th>操作</th></tr>${rows || `<tr><td colspan="5">暂无设备</td></tr>`}</table>
+  <table><tr><th>用户名</th><th>备注</th><th>状态</th><th>订阅链接(发给家人)</th><th>操作</th></tr>${rows || `<tr><td colspan="5" style="color:var(--muted)">暂无设备</td></tr>`}</table>
+
   <h2>节点内容(整批替换)</h2>
   <form method="post"><input type="hidden" name="action" value="savenodes">
-    <textarea name="nodes" rows="12" style="width:100%">${escapeHtml(nodes)}</textarea><br>
-    <button>保存节点</button></form><script>
+    <textarea name="nodes" rows="12">${escapeHtml(nodes)}</textarea>
+    <div class="row"><button>保存节点</button></div></form>
+
+  <h2>邮件测试</h2>
+  <form method="post"><input type="hidden" name="action" value="testmail">
+    <div class="row">
+      <button class="ghost">发送测试邮件</button>
+      <span style="color:var(--muted);font-size:13px">发送到 ${escapeHtml(ADMIN_EMAIL || "(未设置 ADMIN_EMAIL)")}</span>
+    </div></form>
+
+  <div class="qr-mask" id="qrmask" onclick="if(event.target===this)this.classList.remove('show')">
+    <div class="qr-card"><div id="qrbox"></div><p id="qrtext"></p>
+      <button class="ghost" style="margin-top:14px" onclick="document.getElementById('qrmask').classList.remove('show')">关闭</button>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <script>
   async function copyLink(text, btn){
-    try{
-      await navigator.clipboard.writeText(text);
-    }catch(e){
-      // 退路:某些环境 clipboard API 不可用时,用旧方法
-      const t=document.createElement('textarea');t.value=text;document.body.appendChild(t);t.select();
-      try{document.execCommand('copy');}catch(_){}
-      document.body.removeChild(t);
-    }
+    try{ await navigator.clipboard.writeText(text); }
+    catch(e){ const t=document.createElement('textarea');t.value=text;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t); }
     const old=btn.textContent;btn.textContent='已复制';btn.disabled=true;
     setTimeout(()=>{btn.textContent=old;btn.disabled=false;},1200);
   }
+  function showQR(text){
+    const box=document.getElementById('qrbox');box.innerHTML='';
+    new QRCode(box,{text:text,width:220,height:220,correctLevel:QRCode.CorrectLevel.M});
+    document.getElementById('qrtext').textContent=text;
+    document.getElementById('qrmask').classList.add('show');
+  }
   </script>`;
+}
+
+function noticeHtml(msg: string, good: boolean): string {
+  return `<div class="notice ${good ? "good" : "bad"}">${escapeHtml(msg)}</div>`;
 }
 
 // ===================== 主入口 =====================
@@ -194,9 +257,15 @@ Deno.serve(async (req: Request) => {
   // ---- 管理后台 ----
   if (path === ADMIN_PATH) {
     const valid = await quarterCodes(SEED, currentQuarter());
+    const isAuthed = () => {
+      const auth = getCookie(req, "auth");
+      return SEED && auth && valid.includes(auth);
+    };
+
     if (req.method === "POST") {
       const f = await req.formData();
       const action = String(f.get("action") ?? "");
+
       if (action === "login") {
         const code = String(f.get("code") ?? "");
         if (SEED && valid.includes(code)) {
@@ -206,35 +275,43 @@ Deno.serve(async (req: Request) => {
         }
         return html(loginPage("登录码错误"));
       }
-      // 其余操作需已登录
-      const auth = getCookie(req, "auth");
-      if (!SEED || !auth || !valid.includes(auth)) return html(loginPage("请先登录"));
+
+      if (!isAuthed()) return html(loginPage("请先登录"));
+
       if (action === "add") {
         const username = String(f.get("username") ?? "").trim();
         const note = String(f.get("note") ?? "").trim();
         if (username && !(await kv.get(["device", username])).value) {
           await kv.set(["device", username], { id: genId(), enabled: true, note, created: Date.now() });
         }
+        return redirect(ADMIN_PATH);
       } else if (action === "toggle") {
         const u = String(f.get("username") ?? "");
         const cur = await kv.get<{ id: string; enabled: boolean; note?: string }>(["device", u]);
         if (cur.value) await kv.set(["device", u], { ...cur.value, enabled: !cur.value.enabled });
+        return redirect(ADMIN_PATH);
       } else if (action === "del") {
         await kv.delete(["device", String(f.get("username") ?? "")]);
+        return redirect(ADMIN_PATH);
       } else if (action === "savenodes") {
         await kv.set(["nodes"], String(f.get("nodes") ?? ""));
+        return renderDashboard(url.origin, noticeHtml("节点已保存", true));
+      } else if (action === "testmail") {
+        const r = await sendMail(
+          "订阅管理 - 测试邮件",
+          `这是一封测试邮件。\n如果你收到了,说明邮件配置正常。\n时间: ${new Date().toISOString()}`,
+        );
+        const note = r.ok
+          ? noticeHtml("测试邮件已发送,请查收(含垃圾箱)", true)
+          : noticeHtml("发送失败: " + (r.error ?? "未知错误"), false);
+        return renderDashboard(url.origin, note);
       }
       return redirect(ADMIN_PATH);
     }
+
     // GET
-    const auth = getCookie(req, "auth");
-    if (!SEED || !auth || !valid.includes(auth)) return html(loginPage());
-    const devices: Array<{ username: string; id: string; enabled: boolean; note?: string }> = [];
-    for await (const e of kv.list<{ id: string; enabled: boolean; note?: string }>({ prefix: ["device"] })) {
-      devices.push({ username: String(e.key[1]), ...e.value });
-    }
-    const nodes = (await kv.get<string>(["nodes"])).value ?? "";
-    return html(dashboardPage(devices, nodes, url.origin));
+    if (!isAuthed()) return html(loginPage());
+    return renderDashboard(url.origin);
   }
 
   // ---- 兜底:查当季码 ----
@@ -254,3 +331,13 @@ Deno.serve(async (req: Request) => {
   // ---- 其他:原来的网页 ----
   return serveFile(req, "./index.html");
 });
+
+// 渲染后台(读设备 + 节点),可带顶部提示条
+async function renderDashboard(origin: string, notice = ""): Promise<Response> {
+  const devices: Array<{ username: string; id: string; enabled: boolean; note?: string }> = [];
+  for await (const e of kv.list<{ id: string; enabled: boolean; note?: string }>({ prefix: ["device"] })) {
+    devices.push({ username: String(e.key[1]), ...e.value });
+  }
+  const nodes = (await kv.get<string>(["nodes"])).value ?? "";
+  return html(dashboardPage(devices, nodes, origin, notice));
+}
