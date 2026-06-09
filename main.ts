@@ -134,15 +134,19 @@ function dashboardPage(
   nodes: string,
   origin: string,
 ): string {
-  const rows = devices.map((d) => `<tr>
+ const rows = devices.map((d) => {
+    const link = `${origin}/l/${encodeURIComponent(d.username)}/${d.id}`;
+    return `<tr>
     <td>${escapeHtml(d.username)}</td>
     <td>${escapeHtml(d.note)}</td>
     <td>${d.enabled ? "✅启用" : "⛔停用"}</td>
-    <td class="url">${origin}/l/${encodeURIComponent(d.username)}/${d.id}</td>
+    <td class="url">${link}</td>
     <td>
+      <button type="button" onclick="copyLink('${link.replace(/'/g, "\\'")}', this)">复制</button>
       <form method="post" style="display:inline"><input type="hidden" name="action" value="toggle"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button>${d.enabled ? "停用" : "启用"}</button></form>
       <form method="post" style="display:inline" onsubmit="return confirm('确定删除 ${escapeHtml(d.username)} ?')"><input type="hidden" name="action" value="del"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="danger">删除</button></form>
-    </td></tr>`).join("");
+    </td></tr>`;
+  }).join("");
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${STYLE}
   <h2>设备管理</h2>
   <form method="post" class="addform"><input type="hidden" name="action" value="add">
@@ -152,7 +156,20 @@ function dashboardPage(
   <h2>节点内容(整批替换)</h2>
   <form method="post"><input type="hidden" name="action" value="savenodes">
     <textarea name="nodes" rows="12" style="width:100%">${escapeHtml(nodes)}</textarea><br>
-    <button>保存节点</button></form>`;
+    <button>保存节点</button></form><script>
+  async function copyLink(text, btn){
+    try{
+      await navigator.clipboard.writeText(text);
+    }catch(e){
+      // 退路:某些环境 clipboard API 不可用时,用旧方法
+      const t=document.createElement('textarea');t.value=text;document.body.appendChild(t);t.select();
+      try{document.execCommand('copy');}catch(_){}
+      document.body.removeChild(t);
+    }
+    const old=btn.textContent;btn.textContent='已复制';btn.disabled=true;
+    setTimeout(()=>{btn.textContent=old;btn.disabled=false;},1200);
+  }
+  </script>`;
 }
 
 // ===================== 主入口 =====================
