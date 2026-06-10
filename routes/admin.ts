@@ -55,10 +55,12 @@ export async function handleAdmin(req: Request, url: URL): Promise<Response> {
     if (!(await isAuthed(req))) return html(loginPage("请先登录"));
 
     if (action === "add") {
+      let note = String(f.get("note") ?? "").trim();
+      if (!note) note = Array.from({ length: 8 }, () => Math.floor(Math.random() * 10)).join("");
       await addDevice(
         String(f.get("username") ?? "").trim(),
         genId(),
-        String(f.get("note") ?? "").trim(),
+        note,
       );
       return redirect(ADMIN_PATH);
     }
