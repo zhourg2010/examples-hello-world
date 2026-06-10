@@ -62,6 +62,21 @@ const STYLE = `<style>
   .qr-card{background:#fff;padding:24px;border-radius:16px;text-align:center;max-width:300px}
   .qr-card #qrbox{margin:8px auto}
   .qr-card p{font-size:12px;color:var(--muted);word-break:break-all;margin:12px 0 0}
+  /* 左右分栏 */
+  .shell{display:flex;gap:24px;align-items:flex-start}
+  .nav{flex:0 0 180px;position:sticky;top:24px;display:flex;flex-direction:column;gap:4px}
+  .nav a{display:block;padding:10px 14px;border-radius:8px;color:var(--fg);text-decoration:none;font-size:14px;cursor:pointer;border:1px solid transparent}
+  .nav a:hover{background:var(--bg)}
+  .nav a.active{background:#eff6ff;color:var(--blue);border-color:#dbeafe;font-weight:600}
+  .main{flex:1;min-width:0}
+  .pane{display:none}
+  .pane.active{display:block}
+  .pane h2:first-child{margin-top:0}
+  @media(max-width:720px){
+    .shell{flex-direction:column;gap:12px}
+    .nav{flex-direction:row;flex-wrap:wrap;position:static;width:100%}
+    .nav a{flex:1;text-align:center;padding:8px}
+  }
 </style>`;
 
 const HEAD = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${STYLE}`;
@@ -121,38 +136,57 @@ export function dashboardPage(opts: {
 
   return `${HEAD}
   ${notice}
-  <h2>设备管理</h2>
-  <form method="post" class="addform"><input type="hidden" name="action" value="add">
-    <input name="username" placeholder="用户名(如 father-win)" required>
-    <input name="note" placeholder="备注(可选)"><button>添加设备</button></form>
-  <table><tr><th>用户名</th><th>备注</th><th>状态</th><th>最近访问</th><th>订阅链接</th><th>操作</th></tr>
-    ${rows || `<tr><td colspan="6" style="color:var(--muted)">暂无设备</td></tr>`}</table>
+  <div class="shell">
+    <nav class="nav">
+      <a data-pane="devices" class="active" onclick="showPane('devices',this)">设备管理</a>
+      <a data-pane="nodes" onclick="showPane('nodes',this)">节点内容</a>
+      <a data-pane="backup" onclick="showPane('backup',this)">备份</a>
+      <a data-pane="system" onclick="showPane('system',this)">系统 / 邮件</a>
+    </nav>
+    <div class="main">
 
-  <h2>节点内容(整批替换)</h2>
-  <p class="sub">${escapeHtml(updatedText)}</p>
-  <form method="post" onsubmit="return checkNodes(this)"><input type="hidden" name="action" value="savenodes">
-    <textarea name="nodes" rows="12">${escapeHtml(nodes)}</textarea>
-    <div class="row">
-      <button>保存节点</button>
-      ${hasHistory ? `<button type="button" class="ghost" onclick="if(confirm('恢复到上一版节点?当前内容会被替换。'))document.getElementById('restoreForm').submit()">恢复上一版</button>` : ""}
-    </div></form>
-  ${hasHistory ? `<form id="restoreForm" method="post" style="display:none"><input type="hidden" name="action" value="restorenodes"></form>` : ""}
+      <section class="pane active" id="pane-devices">
+        <h2>设备管理</h2>
+        <form method="post" class="addform"><input type="hidden" name="action" value="add">
+          <input name="username" placeholder="用户名(如 father-win)" required>
+          <input name="note" placeholder="备注(可选)"><button>添加设备</button></form>
+        <table><tr><th>用户名</th><th>备注</th><th>状态</th><th>最近访问</th><th>订阅链接</th><th>操作</th></tr>
+          ${rows || `<tr><td colspan="6" style="color:var(--muted)">暂无设备</td></tr>`}</table>
+      </section>
 
-  <h2>备份</h2>
-  <p class="sub">导出:把全部设备和节点存成一段文本,妥善保管,重建时可恢复。</p>
-  <div class="row">
-    <a href="?export=1"><button type="button" class="ghost">导出备份</button></a>
+      <section class="pane" id="pane-nodes">
+        <h2>节点内容(整批替换)</h2>
+        <p class="sub">${escapeHtml(updatedText)}</p>
+        <form method="post" onsubmit="return checkNodes(this)"><input type="hidden" name="action" value="savenodes">
+          <textarea name="nodes" rows="14">${escapeHtml(nodes)}</textarea>
+          <div class="row">
+            <button>保存节点</button>
+            ${hasHistory ? `<button type="button" class="ghost" onclick="if(confirm('恢复到上一版节点?当前内容会被替换。'))document.getElementById('restoreForm').submit()">恢复上一版</button>` : ""}
+          </div></form>
+        ${hasHistory ? `<form id="restoreForm" method="post" style="display:none"><input type="hidden" name="action" value="restorenodes"></form>` : ""}
+      </section>
+
+      <section class="pane" id="pane-backup">
+        <h2>备份</h2>
+        <p class="sub">导出:把全部设备和节点存成一段文本,妥善保管,重建时可恢复。</p>
+        <div class="row"><a href="?export=1"><button type="button" class="ghost">导出备份</button></a></div>
+        <p class="sub" style="margin-top:18px;color:var(--red)">恢复会覆盖现有全部设备和节点,谨慎使用。</p>
+        <form method="post" class="row" onsubmit="return confirm('恢复将覆盖现有全部设备和节点!确定?')">
+          <input type="hidden" name="action" value="importbackup">
+          <input name="backup" placeholder="粘贴备份文本以恢复" style="flex:1;min-width:240px">
+          <button class="danger">恢复备份</button>
+        </form>
+      </section>
+
+      <section class="pane" id="pane-system">
+        <h2>邮件测试</h2>
+        <form method="post"><input type="hidden" name="action" value="testmail">
+          <div class="row"><button class="ghost">发送测试邮件</button>
+            <span class="sub">发送到 ${escapeHtml(ADMIN_EMAIL || "(未设置 ADMIN_EMAIL)")}</span></div></form>
+      </section>
+
+    </div>
   </div>
-  <form method="post" class="row" onsubmit="return confirm('恢复将覆盖现有全部设备和节点!确定?')" style="margin-top:8px">
-    <input type="hidden" name="action" value="importbackup">
-    <input name="backup" placeholder="粘贴备份文本以恢复" style="flex:1;min-width:240px">
-    <button class="danger">恢复备份</button>
-  </form>
-
-  <h2>邮件测试</h2>
-  <form method="post"><input type="hidden" name="action" value="testmail">
-    <div class="row"><button class="ghost">发送测试邮件</button>
-      <span class="sub">发送到 ${escapeHtml(ADMIN_EMAIL || "(未设置 ADMIN_EMAIL)")}</span></div></form>
 
   <div class="qr-mask" id="qrmask" onclick="if(event.target===this)this.classList.remove('show')">
     <div class="qr-card"><div id="qrbox"></div><p id="qrtext"></p>
@@ -160,6 +194,18 @@ export function dashboardPage(opts: {
   </div>
   <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
   <script>
+  function showPane(name, el){
+    document.querySelectorAll('.pane').forEach(p=>p.classList.remove('active'));
+    document.getElementById('pane-'+name).classList.add('active');
+    document.querySelectorAll('.nav a').forEach(a=>a.classList.remove('active'));
+    el.classList.add('active');
+    try{ history.replaceState(null,'','#'+name); }catch(e){}
+  }
+  // 进页面时按 URL hash 恢复上次所在分类
+  (function(){
+    const h=(location.hash||'').replace('#','');
+    if(h){ const el=document.querySelector('.nav a[data-pane="'+h+'"]'); if(el) showPane(h,el); }
+  })();
   async function copyLink(text, btn){
     try{ await navigator.clipboard.writeText(text); }
     catch(e){ const t=document.createElement('textarea');t.value=text;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t); }
@@ -171,7 +217,6 @@ export function dashboardPage(opts: {
     document.getElementById('qrtext').textContent=text;
     document.getElementById('qrmask').classList.add('show');
   }
-  // 功能1:防手滑存空。内容为空时拦下来要确认。
   function checkNodes(form){
     const v=form.nodes.value.trim();
     if(v==='') return confirm('节点内容是空的!保存后所有设备将无法获取节点。确定要保存空内容?');
