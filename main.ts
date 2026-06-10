@@ -18,7 +18,7 @@ Deno.serve(async (req: Request) => {
   // 订阅:/l/{username}/{id}
   const parts = path.split("/").filter(Boolean);
   if (parts[0] === "l" && parts.length === 3) {
-    return await handleSubscribe(parts);
+    return await handleSubscribe(parts, req);
   }
 
   // 管理后台

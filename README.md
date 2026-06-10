@@ -48,6 +48,7 @@ if (path === "/你的隐藏路径") return await handleStats(req);
 | RESEND_API_KEY | 邮件密钥 re_xxx | 用邮件才填 |
 | ADMIN_EMAIL | 收件邮箱(免费版须=Resend 注册邮箱) | 用邮件才填 |
 | MAIL_FROM | 发件地址,默认 onboarding@resend.dev | 否 |
+| DATABASE_URL | Neon 连接串,用于领取日志归档+看板;不填则日志只留 KV 最近100条 | 否 |
 
 改环境变量后必须**重新部署**才生效。
 

@@ -108,6 +108,7 @@ export function dashboardPage(opts: {
       <td><div class="actions">
         <button type="button" class="ghost" onclick='copyLink(${j},this)'>复制</button>
         <button type="button" class="ghost" onclick='showQR(${j})'>二维码</button>
+        <a href="?user=${encodeURIComponent(d.username)}"><button type="button" class="ghost">详情</button></a>
         <form method="post"><input type="hidden" name="action" value="rotate"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" onclick="return confirm('换链接后旧链接立即失效,需重新发给对方。继续?')">换链接</button></form>
         <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost">${d.enabled ? "停用" : "启用"}</button></form>
         <form method="post" onsubmit="return confirm('删除 ${escapeHtml(d.username)} ?')"><input type="hidden" name="action" value="del"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="danger">删除</button></form>
@@ -177,4 +178,85 @@ export function dashboardPage(opts: {
     return true;
   }
   </script>`;
+}
+
+// ========== 用户活跃度看板 ==========
+import type { LogEntry } from "./kv.ts";
+import type { UserStats } from "./db.ts";
+import { ADMIN_PATH } from "./config.ts";
+
+export function userDashboardPage(
+  username: string,
+  stats: UserStats | null,
+  recent: LogEntry[],
+  dbEnabled: boolean,
+): string {
+  // 近7天柱状(按天)
+  let activity = "";
+  if (stats) {
+    const map = new Map(stats.days.map((d) => [d.day, d.n]));
+    const today = new Date();
+    const bars: string[] = [];
+    let max = 1;
+    const seq: Array<{ label: string; n: number }> = [];
+    for (let i = 6; i >= 0; i--) {
+      const dt = new Date(today.getTime() - i * 86400000);
+      const label = `${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+      const n = map.get(label) ?? 0;
+      if (n > max) max = n;
+      seq.push({ label, n });
+    }
+    for (const s of seq) {
+      const h = Math.round((s.n / max) * 80);
+      bars.push(`<div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1">
+        <div style="font-size:11px;color:var(--muted)">${s.n}</div>
+        <div style="width:60%;height:${h || 2}px;background:${s.n ? "var(--blue)" : "var(--bd)"};border-radius:4px 4px 0 0"></div>
+        <div style="font-size:11px;color:var(--muted)">${s.label}</div>
+      </div>`);
+    }
+    activity = `<div style="display:flex;align-items:flex-end;gap:6px;height:120px;padding:12px;border:1px solid var(--bd);border-radius:10px">${bars.join("")}</div>`;
+  }
+
+  // IP 表
+  const ipRows = stats?.ips.map((r) =>
+    `<tr><td class="url">${escapeHtml(r.ip)}</td><td>${r.n}</td><td style="color:var(--muted)">${escapeHtml(r.last)}</td></tr>`
+  ).join("") ?? "";
+
+  // 泄露风险粗判:不同 IP 数 + UA 种类
+  let risk = "—";
+  if (stats) {
+    const ipCount = stats.ips.length;
+    const uaCount = stats.uas.length;
+    if (uaCount > 1 || ipCount > 8) risk = `<span style="color:var(--red)">偏高</span>(${ipCount} 个IP / ${uaCount} 种客户端)`;
+    else if (ipCount > 4) risk = `<span style="color:#d97706">中</span>(${ipCount} 个IP / ${uaCount} 种客户端)`;
+    else risk = `<span style="color:#059669">低</span>(${ipCount} 个IP / ${uaCount} 种客户端)`;
+  }
+
+  // 最近领取(来自 KV 缓冲)
+  const recentRows = recent.map((r) => {
+    const t = new Date(r.ts).toLocaleString("zh-CN");
+    return `<tr><td style="color:var(--muted)">${escapeHtml(t)}</td><td class="url">${escapeHtml(r.ip)}</td><td class="url">${escapeHtml(r.ua)}</td></tr>`;
+  }).join("");
+
+  const dbNote = dbEnabled
+    ? `<p class="sub">说明:这是"订阅领取"活跃度,不是翻墙使用量。下方统计基于已归档数据,最近不足50条领取以"最近领取"列表为准。IP 多不一定是泄露(家庭宽带IP会变),但出现陌生 client 类型或 IP 数异常多时需留意。</p>`
+    : `<p class="sub" style="color:var(--red)">未配置 DATABASE_URL,Neon 归档未启用,仅显示 KV 里最近的领取记录,无长期统计。</p>`;
+
+  return `${HEAD}
+  <p><a href="${ADMIN_PATH}" style="color:var(--blue);text-decoration:none">← 返回设备列表</a></p>
+  <h2>${escapeHtml(username)} · 领取活跃度</h2>
+  ${dbNote}
+  ${stats ? `<p class="sub">累计领取 ${stats.total} 次 · 泄露风险:${risk}</p>` : ""}
+
+  ${stats ? `<h2>近 7 天领取</h2>${activity}` : ""}
+
+  ${stats && stats.ips.length ? `<h2>IP 记录(近30天)</h2>
+  <table><tr><th>IP</th><th>次数</th><th>最近</th></tr>${ipRows}</table>` : ""}
+
+  ${stats && stats.uas.length ? `<h2>客户端类型(近30天)</h2>
+  <ul>${stats.uas.map((u) => `<li class="url">${escapeHtml(u)}</li>`).join("")}</ul>
+  ${stats.uas.length > 1 ? `<p class="sub" style="color:var(--red)">⚠ 出现多于一种 client,可能这条链接被用在了不止一台设备/被转发。</p>` : ""}` : ""}
+
+  <h2>最近领取(实时)</h2>
+  ${recentRows ? `<table><tr><th>时间</th><th>IP</th><th>客户端 UA</th></tr>${recentRows}</table>` : `<p class="sub">暂无最近领取记录。</p>`}`;
 }

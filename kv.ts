@@ -139,3 +139,78 @@ export async function importBackup(b: Backup): Promise<{ devices: number }> {
   await kv.set(["nodes_updated"], Date.now());
   return { devices: b.devices.length };
 }
+
+// ========== 领取日志(KV 缓冲层,配合 Neon 归档) ==========
+// 设计:每次领取写一条到 KV,带单调递增 seq。
+// flushed_seq = 已归档进 Neon 的最大 seq。未归档 = seq > flushed_seq。
+// 裁剪:只删"已归档且在最近100条之外"的;未归档绝不删(防 Neon 故障丢数据)。
+
+export interface LogEntry {
+  seq: number;
+  username: string;
+  ts: number;
+  ip: string;
+  ua: string;
+}
+
+const KEEP_RECENT = 100;
+
+// 原子递增 seq 并写入一条日志
+export async function appendLog(username: string, ip: string, ua: string): Promise<void> {
+  while (true) {
+    const cur = await kv.get<number>(["log_seq"]);
+    const seq = (cur.value ?? 0) + 1;
+    const r = await kv.atomic()
+      .check(cur)
+      .set(["log_seq"], seq)
+      .set(["log", seq], { username, ts: Date.now(), ip, ua })
+      .commit();
+    if (r.ok) break; // 冲突则重试
+  }
+}
+
+export async function getLogState(): Promise<{ logSeq: number; flushedSeq: number }> {
+  const logSeq = (await kv.get<number>(["log_seq"])).value ?? 0;
+  const flushedSeq = (await kv.get<number>(["flushed_seq"])).value ?? 0;
+  return { logSeq, flushedSeq };
+}
+
+// 取所有未归档日志(按 seq 升序)
+export async function getUnarchivedLogs(): Promise<LogEntry[]> {
+  const { flushedSeq } = await getLogState();
+  const out: LogEntry[] = [];
+  for await (const e of kv.list<Omit<LogEntry, "seq">>({ prefix: ["log"] })) {
+    const seq = Number(e.key[1]);
+    if (seq > flushedSeq) out.push({ seq, ...e.value });
+  }
+  out.sort((a, b) => a.seq - b.seq);
+  return out;
+}
+
+// 推进归档游标(只前进不后退)
+export async function setFlushedSeq(seq: number): Promise<void> {
+  const cur = (await kv.get<number>(["flushed_seq"])).value ?? 0;
+  if (seq > cur) await kv.set(["flushed_seq"], seq);
+}
+
+// 某用户最近 n 条领取记录(从 KV 缓冲取,最多扫 ~100 条)
+export async function getRecentLogsForUser(username: string, n: number): Promise<LogEntry[]> {
+  const all: LogEntry[] = [];
+  for await (const e of kv.list<Omit<LogEntry, "seq">>({ prefix: ["log"] })) {
+    if (e.value.username === username) all.push({ seq: Number(e.key[1]), ...e.value });
+  }
+  all.sort((a, b) => b.seq - a.seq);
+  return all.slice(0, n);
+}
+
+// 裁剪日志。dbEnabled=true:只删已归档且超出最近100条的;false:退化为滚动保留最近100
+export async function trimLogs(dbEnabled: boolean): Promise<void> {
+  const { logSeq, flushedSeq } = await getLogState();
+  const keepFrom = logSeq - KEEP_RECENT;
+  for await (const e of kv.list({ prefix: ["log"] })) {
+    const seq = Number(e.key[1]);
+    if (seq > keepFrom) continue;                 // 最近100条保留
+    if (dbEnabled && seq > flushedSeq) continue;  // 未归档保留(防丢)
+    await kv.delete(e.key);
+  }
+}
