@@ -2,6 +2,7 @@
 
 import { appendLog, getDevice, getNodes, recordHit } from "../kv.ts";
 import { maybeFlush } from "../db.ts";
+import { toSingboxJson } from "../singbox.ts";
 
 export async function handleSubscribe(parts: string[], req: Request): Promise<Response> {
   // parts = ["l", username, id]
@@ -11,15 +12,17 @@ export async function handleSubscribe(parts: string[], req: Request): Promise<Re
     return new Response("Not Found", { status: 404 });
   }
 
-  // 计数(快)
   recordHit(username).catch(() => {});
-
-  // 领取日志:记 IP + UA,然后异步触发归档检查。
-  // 全程 fire-and-forget,Neon 慢/挂都不影响订阅秒回;未归档数据留在 KV,下次重试。
   const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "?";
   const ua = req.headers.get("user-agent") ?? "?";
   appendLog(username, ip, ua).then(() => maybeFlush()).catch(() => {});
 
   const nodes = await getNodes();
+
+  // 按设备格式返回:singbox → 实时转 JSON;否则原样返回 base64
+  if (dev.format === "singbox") {
+    const json = toSingboxJson(nodes);
+    return new Response(json, { headers: { "content-type": "application/json; charset=utf-8" } });
+  }
   return new Response(nodes, { headers: { "content-type": "text/plain; charset=utf-8" } });
 }

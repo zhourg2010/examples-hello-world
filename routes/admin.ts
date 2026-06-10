@@ -57,11 +57,19 @@ export async function handleAdmin(req: Request, url: URL): Promise<Response> {
     if (action === "add") {
       let note = String(f.get("note") ?? "").trim();
       if (!note) note = Array.from({ length: 8 }, () => Math.floor(Math.random() * 10)).join("");
+      const format = String(f.get("format") ?? "base64") === "singbox" ? "singbox" : "base64";
       await addDevice(
         String(f.get("username") ?? "").trim(),
         genId(),
         note,
+        format,
       );
+      return redirect(ADMIN_PATH);
+    }
+    if (action === "switchformat") {
+      const u = String(f.get("username") ?? "");
+      const dev = (await listDevices()).find((d) => d.username === u);
+      if (dev) await setDevice(u, { format: dev.format === "singbox" ? "base64" : "singbox" });
       return redirect(ADMIN_PATH);
     }
     if (action === "toggle") {
