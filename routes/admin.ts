@@ -8,7 +8,9 @@ import {
   saveNodes, setDevice,
 } from "../kv.ts";
 import { sendMail } from "../mail.ts";
-import { dashboardPage, html, loginPage, noticeHtml, redirect } from "../ui.ts";
+import { dbEnabled, userStats } from "../db.ts";
+import { getRecentLogsForUser } from "../kv.ts";
+import { dashboardPage, html, loginPage, noticeHtml, redirect, userDashboardPage } from "../ui.ts";
 
 async function render(origin: string, notice = ""): Promise<Response> {
   return html(dashboardPage({
@@ -100,7 +102,13 @@ export async function handleAdmin(req: Request, url: URL): Promise<Response> {
     return redirect(ADMIN_PATH);
   }
 
-  // GET 后台首页
+  // GET 后台首页 / 用户看板
   if (!(await isAuthed(req))) return html(loginPage());
+  const user = url.searchParams.get("user");
+  if (user) {
+    const stats = await userStats(user);
+    const recent = await getRecentLogsForUser(user, 20);
+    return html(userDashboardPage(user, stats, recent, dbEnabled));
+  }
   return render(url.origin);
 }
