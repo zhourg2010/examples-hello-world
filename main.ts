@@ -329,6 +329,18 @@ Deno.serve(async (req: Request) => {
   }
 
   // ---- 其他:原来的网页 ----
+  // 临时诊断:列出 KV 所有键(看完务必删除)
+  if (path === "/debug-kv-9988") {
+    const kv = await Deno.openKv();
+    const keys: string[] = [];
+    for await (const e of kv.list({ prefix: [] })) {
+      keys.push(JSON.stringify(e.key));
+    }
+    return new Response(
+      `KV 共 ${keys.length} 条:\n\n` + keys.join("\n"),
+      { headers: { "content-type": "text/plain; charset=utf-8" } },
+    );
+  }
   return serveFile(req, "./index.html");
 });
 
