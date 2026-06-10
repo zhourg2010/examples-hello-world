@@ -28,7 +28,7 @@ function timeAgo(ts?: number): string {
 const STYLE = `<style>
   :root{--bd:#e5e7eb;--fg:#1f2937;--muted:#6b7280;--blue:#2563eb;--red:#dc2626;--bg:#f9fafb}
   *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,sans-serif;max-width:960px;margin:32px auto;padding:0 16px;color:var(--fg);background:#fff}
+  body{font-family:system-ui,-apple-system,sans-serif;max-width:1080px;margin:32px auto;padding:0 16px;color:var(--fg);background:#fff}
   h2{margin:28px 0 12px;font-size:18px}
   .sub{color:var(--muted);font-size:13px;margin:4px 0 0}
   .err{color:var(--red)} .ok{color:#059669}
@@ -46,9 +46,12 @@ const STYLE = `<style>
   table{border-collapse:separate;border-spacing:0;width:100%;margin-top:8px;font-size:14px;border:1px solid var(--bd);border-radius:10px;overflow:hidden}
   th{background:var(--bg);color:var(--muted);font-weight:600;text-align:left;padding:10px 12px;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
   td{border-top:1px solid var(--bd);padding:10px 12px;vertical-align:middle}
-  .url{font-family:ui-monospace,monospace;font-size:12px;color:var(--muted);word-break:break-all;max-width:240px}
-  .actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-  .actions form{display:inline;margin:0}
+  .url{font-family:ui-monospace,monospace;font-size:12px;color:var(--muted);max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;min-width:210px}
+  .actions>form,.actions>a{margin:0;display:block}
+  .actions a{text-decoration:none}
+  .actions button{width:100%;font-size:12px;padding:6px 2px;height:30px}
+  .tablewrap{overflow-x:auto}
   .status{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px}
   .status.on{background:#ecfdf5;color:#059669}.status.off{background:#fef2f2;color:#b91c1c}
   .addform{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px}
@@ -118,12 +121,14 @@ export function dashboardPage(opts: {
       <td><strong>${escapeHtml(d.username)}</strong></td>
       <td style="color:var(--muted)">${escapeHtml(d.note)}</td>
       <td><span class="status ${d.enabled ? "on" : "off"}">${d.enabled ? "启用" : "停用"}</span></td>
+      <td><span class="status" style="background:${d.format === "singbox" ? "#eef2ff;color:#4f46e5" : "#f1f5f9;color:#475569"}">${d.format === "singbox" ? "sing-box" : "base64"}</span></td>
       <td class="hits">${timeAgo(d.lastSeen)}<br><span style="opacity:.7">共 ${d.hits ?? 0} 次</span></td>
       <td class="url">${link}</td>
       <td><div class="actions">
         <button type="button" class="ghost" onclick='copyLink(${j},this)'>复制</button>
         <button type="button" class="ghost" onclick='showQR(${j})'>二维码</button>
         <a href="?user=${encodeURIComponent(d.username)}"><button type="button" class="ghost">详情</button></a>
+        <form method="post"><input type="hidden" name="action" value="switchformat"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" title="当前 ${d.format === "singbox" ? "sing-box" : "base64"},点击切换">格式</button></form>
         <form method="post"><input type="hidden" name="action" value="rotate"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" onclick="return confirm('换链接后旧链接立即失效,需重新发给对方。继续?')">换链接</button></form>
         <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost">${d.enabled ? "停用" : "启用"}</button></form>
         <form method="post" onsubmit="return confirm('删除 ${escapeHtml(d.username)} ?')"><input type="hidden" name="action" value="del"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="danger">删除</button></form>
@@ -149,9 +154,14 @@ export function dashboardPage(opts: {
         <h2>设备管理</h2>
         <form method="post" class="addform"><input type="hidden" name="action" value="add">
           <input name="username" placeholder="用户名(如 father-win)" required>
-          <input name="note" placeholder="备注(可选)"><button>添加设备</button></form>
-        <table><tr><th>用户名</th><th>备注</th><th>状态</th><th>最近访问</th><th>订阅链接</th><th>操作</th></tr>
-          ${rows || `<tr><td colspan="6" style="color:var(--muted)">暂无设备</td></tr>`}</table>
+          <input name="note" placeholder="备注(留空自动生成数字)">
+          <select name="format" style="font:inherit;padding:8px 10px;border:1px solid var(--bd);border-radius:8px">
+            <option value="base64">base64(v2rayN/Shadowrocket)</option>
+            <option value="singbox">sing-box</option>
+          </select>
+          <button>添加设备</button></form>
+        <div class="tablewrap"><table><tr><th>用户名</th><th>备注</th><th>状态</th><th>格式</th><th>最近访问</th><th>订阅链接</th><th>操作</th></tr>
+          ${rows || `<tr><td colspan="7" style="color:var(--muted)">暂无设备</td></tr>`}</table></div>
       </section>
 
       <section class="pane" id="pane-nodes">

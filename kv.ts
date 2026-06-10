@@ -11,6 +11,7 @@ export interface Device {
   id: string;
   enabled: boolean;
   note?: string;
+  format?: "base64" | "singbox"; // 订阅返回格式,默认 base64
   created?: number;
   lastSeen?: number; // 最后一次拉订阅的时间(功能3:访问侦测)
   hits?: number;     // 累计拉取次数
@@ -31,10 +32,10 @@ export async function getDevice(username: string): Promise<Device | null> {
   return r.value ? { username, ...r.value } : null;
 }
 
-export async function addDevice(username: string, id: string, note: string): Promise<boolean> {
+export async function addDevice(username: string, id: string, note: string, format: "base64" | "singbox" = "base64"): Promise<boolean> {
   if (!username) return false;
   if ((await kv.get(["device", username])).value) return false; // 已存在
-  await kv.set(["device", username], { id, enabled: true, note, created: Date.now(), hits: 0 });
+  await kv.set(["device", username], { id, enabled: true, note, format, created: Date.now(), hits: 0 });
   return true;
 }
 
