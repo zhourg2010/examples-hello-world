@@ -7,6 +7,7 @@ import { maybeSendQuarterEmail } from "./mail.ts";
 import { handleSubscribe } from "./routes/subscribe.ts";
 import { handleAdmin } from "./routes/admin.ts";
 import { handleFallback } from "./routes/fallback.ts";
+import { handleTools } from "./routes/tools.ts";
 
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
@@ -29,6 +30,11 @@ Deno.serve(async (req: Request) => {
   // 应急查码
   if (path === FALLBACK_PATH) {
     return await handleFallback(req);
+  }
+
+  // 工具箱
+  if (path === ADMIN_PATH + "/tools") {
+    return await handleTools(req);
   }
 
   // 其他:默认网页

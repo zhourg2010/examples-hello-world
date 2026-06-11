@@ -147,6 +147,7 @@ export function dashboardPage(opts: {
       <a data-pane="nodes" onclick="showPane('nodes',this)">节点内容</a>
       <a data-pane="backup" onclick="showPane('backup',this)">备份</a>
       <a data-pane="system" onclick="showPane('system',this)">系统 / 邮件</a>
+      <a href="${ADMIN_PATH}/tools" style="margin-top:8px;border-top:1px solid var(--bd);padding-top:14px">🧰 工具箱</a>
     </nav>
     <div class="main">
 
