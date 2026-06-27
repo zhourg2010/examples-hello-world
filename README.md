@@ -16,6 +16,7 @@ routes/
   admin.ts         后台:登录、设备增删改、节点、备份、邮件
   fallback.ts      应急查码入口
   tools.ts         工具箱路由(需登录)
+  push.ts          接收本地测速推送(PUSH_KEY 保护)→ 写 KV nodes
 index.html         默认伪装首页(无敏感信息)
 deno.json          本地开发任务
 ```
