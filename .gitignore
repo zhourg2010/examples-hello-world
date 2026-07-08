@@ -1,0 +1,8 @@
+env
+logs/
+archive/
+bin/subs-check
+bin/config.yaml
+bin/output/
+*.log
+bin/
