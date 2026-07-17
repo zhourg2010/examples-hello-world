@@ -17,9 +17,9 @@ Deno.serve(async (req: Request) => {
   // 换季后首次访问触发发码邮件(尽力而为,不阻塞)
   maybeSendQuarterEmail().catch(() => {});
 
-  // 订阅:/l/{username}/{id}
+  // 订阅:/l/{username}/{id}[/{clientTag}]
   const parts = path.split("/").filter(Boolean);
-  if (parts[0] === "l" && parts.length === 3) {
+  if (parts[0] === "l" && (parts.length === 3 || parts.length === 4)) {
     return await handleSubscribe(parts, req);
   }
 

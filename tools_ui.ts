@@ -4,25 +4,27 @@
 import { ADMIN_PATH } from "./config.ts";
 
 const STYLE = `<style>
-  :root{--bd:#e5e7eb;--fg:#1f2937;--muted:#6b7280;--blue:#2563eb;--red:#dc2626;--bg:#f9fafb}
+  @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&display=swap');
+  :root{--bg:#f3f2f2;--fg:#1a1a1a;--muted:#6b6b68;--accent:#ec3013;--bd:#1a1a1a;--bd2:#c9c7c3}
   *{box-sizing:border-box}
-  body{font-family:system-ui,-apple-system,sans-serif;max-width:1080px;margin:32px auto;padding:0 16px;color:var(--fg)}
-  a.back{color:var(--blue);text-decoration:none;font-size:14px}
-  h1{font-size:20px;margin:8px 0 4px}
-  .lead{color:var(--muted);font-size:13px;margin:0 0 20px}
+  body{font-family:'Archivo',system-ui,-apple-system,sans-serif;max-width:1120px;margin:0 auto;padding:20px 20px 60px;color:var(--fg);background:var(--bg)}
+  a.back{color:var(--accent);text-decoration:none;font-size:13px;font-weight:600}
+  h1{font-size:22px;font-weight:800;letter-spacing:-.01em;margin:16px 0 4px}
+  .lead{color:var(--muted);font-size:13px;margin:0 0 20px;line-height:1.6}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
-  .tool{border:1px solid var(--bd);border-radius:12px;padding:16px;background:#fff}
-  .tool h3{margin:0 0 4px;font-size:15px}
-  .tool .hint{color:var(--muted);font-size:12px;margin:0 0 10px}
-  textarea,input,select{width:100%;font:inherit;font-size:13px;padding:8px 10px;border:1px solid var(--bd);border-radius:8px;outline:none;font-family:ui-monospace,monospace}
-  textarea:focus,input:focus{border-color:var(--blue)}
+  .tool{border:2px solid var(--bd);padding:16px;background:#fff}
+  .tool h3{margin:0 0 4px;font-size:15px;font-weight:700}
+  .tool .hint{color:var(--muted);font-size:12px;margin:0 0 10px;line-height:1.5}
+  textarea,input,select{width:100%;font:inherit;font-size:13px;padding:9px 10px;border:2px solid var(--bd);border-radius:0;outline:none;font-family:ui-monospace,Menlo,monospace;background:#fff;color:var(--fg)}
+  textarea:focus,input:focus,select:focus{border-color:var(--accent)}
   textarea{resize:vertical;line-height:1.5}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
-  button{font:inherit;font-size:13px;padding:6px 12px;border:1px solid var(--bd);border-radius:8px;background:#fff;color:var(--fg);cursor:pointer}
-  button:hover{background:var(--bg)}
-  button.p{background:var(--blue);color:#fff;border-color:var(--blue)}
-  .out{margin-top:8px;background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:10px;font-family:ui-monospace,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;min-height:20px;max-height:260px;overflow:auto}
-  .out.err{color:var(--red);background:#fef2f2;border-color:#fecaca}
+  button{font:inherit;font-size:13px;font-weight:600;padding:8px 14px;border:2px solid var(--bd);border-radius:0;background:#fff;color:var(--fg);cursor:pointer;transition:.12s}
+  button:hover{background:var(--fg);color:#fff}
+  button.p{background:var(--fg);color:#fff;border-color:var(--fg)}
+  button.p:hover{background:var(--accent);border-color:var(--accent)}
+  .out{margin-top:8px;background:var(--bg);border:2px solid var(--bd2);padding:10px;font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;min-height:20px;max-height:260px;overflow:auto}
+  .out.err{color:#a3200f;background:#fdeceb;border-color:var(--accent)}
   label{font-size:12px;color:var(--muted)}
   .mini{font-size:12px;color:var(--muted)}
 </style>`;
@@ -48,7 +50,7 @@ export function toolsPage(): string {
 
     <div class="tool">
       <h3>节点链接解析</h3>
-      <p class="hint">粘一条 vmess:// vless:// trojan:// ss:// 看里面的字段。</p>
+      <p class="hint">粘一条 vmess:// vless:// trojan:// anytls:// ss:// 看里面的字段。</p>
       <textarea id="nodein" rows="3" placeholder="vmess://..."></textarea>
       <div class="row"><button class="p" onclick="parseNode()">解析</button></div>
       <div class="out" id="nodeout"></div>
@@ -141,9 +143,9 @@ function parseNode(){
   try{
     const u=$('nodein').value.trim(); let r={};
     if(u.startsWith('vmess://')){ r=JSON.parse(dec.decode(fromB64(u.slice(8)))); }
-    else if(u.startsWith('vless://')||u.startsWith('trojan://')){ const x=new URL(u); r={protocol:x.protocol.replace(':',''),uuid_or_pass:decodeURIComponent(x.username),server:x.hostname,port:x.port,params:Object.fromEntries(x.searchParams),name:decodeURIComponent(x.hash.slice(1))}; }
+    else if(u.startsWith('vless://')||u.startsWith('trojan://')||u.startsWith('anytls://')){ const x=new URL(u); r={protocol:x.protocol.replace(':',''),uuid_or_pass:decodeURIComponent(x.username),server:x.hostname,port:x.port,params:Object.fromEntries(x.searchParams),name:decodeURIComponent(x.hash.slice(1))}; }
     else if(u.startsWith('ss://')){ let rest=u.slice(5); const h=rest.indexOf('#'); const name=h>=0?decodeURIComponent(rest.slice(h+1)):''; if(h>=0)rest=rest.slice(0,h); let method,pass,server,port; if(rest.includes('@')){const at=rest.lastIndexOf('@');const dec1=atob(rest.slice(0,at).replace(/-/g,'+').replace(/_/g,'/'));[method,pass]=dec1.split(':');const hp=rest.slice(at+1);const lc=hp.lastIndexOf(':');server=hp.slice(0,lc);port=hp.slice(lc+1);} r={protocol:'ss',method,password:pass,server,port,name}; }
-    else throw new Error('无法识别的协议(支持 vmess/vless/trojan/ss)');
+    else throw new Error('无法识别的协议(支持 vmess/vless/trojan/anytls/ss)');
     show('nodeout',JSON.stringify(r,null,2));
   }catch(e){show('nodeout','错误:'+e.message,1);}
 }

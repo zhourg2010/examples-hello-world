@@ -35,6 +35,8 @@ esac
   echo "keep-days: ${KEEPDAYS}"
   echo "node-type:"
   echo "  - vless"
+  echo "  - anytls"
+  echo "  - trojan"
   echo "media-check: ${MEDIA}"
   echo "media-check-timeout: 6"
   [ -n "$PLATFORMS" ] && echo "$PLATFORMS"

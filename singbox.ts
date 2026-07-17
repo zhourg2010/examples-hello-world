@@ -1,11 +1,11 @@
 // singbox.ts — base64 节点列表 → sing-box 客户端 JSON。
-// 支持 vmess / vless(含 reality) / trojan / shadowsocks(ss)。自动跳过 ssr 及无法解析的节点。
+// 支持 vmess / vless(含 reality) / trojan / anytls / shadowsocks(ss)。自动跳过 ssr 及无法解析的节点。
 // 设计:服务器实时转换,用户那头只维护 base64 一份。
 
 // deno-lint-ignore-file no-explicit-any
 type Outbound = Record<string, any> & { tag: string; type: string };
 
-function b64decode(s: string): string {
+export function b64decode(s: string): string {
   s = s.replace(/-/g, "+").replace(/_/g, "/").trim();
   while (s.length % 4) s += "=";
   try {
@@ -97,6 +97,29 @@ function parseTrojan(uri: string, idx: number): Outbound | null {
   } catch { return null; }
 }
 
+function parseAnytls(uri: string, idx: number): Outbound | null {
+  // anytls://[password@]host[:port]/?[sni=...]&[insecure=0|1]#name
+  // https://github.com/anytls/anytls-go/blob/main/docs/uri_scheme.md
+  try {
+    const u = new URL(uri);
+    const p = q(u.search.slice(1));
+    const ob: Outbound = {
+      type: "anytls",
+      tag: nameOr(`anytls-${idx}`, decodeURIComponent(u.hash.slice(1))),
+      server: u.hostname,
+      server_port: Number(u.port) || 443,
+      password: decodeURIComponent(u.username),
+    };
+    if (!ob.server || !ob.password) return null;
+    ob.tls = {
+      enabled: true,
+      server_name: p.sni || u.hostname,
+      insecure: p.insecure === "1",
+    };
+    return ob;
+  } catch { return null; }
+}
+
 function parseSS(uri: string, idx: number): Outbound | null {
   try {
     let rest = uri.slice(5);
@@ -131,7 +154,7 @@ function parseSS(uri: string, idx: number): Outbound | null {
 
 export function parseNodes(input: string): Outbound[] {
   let text = input.trim();
-  if (!/(vmess|vless|trojan|ss|ssr):\/\//i.test(text)) {
+  if (!/(vmess|vless|trojan|anytls|ss|ssr):\/\//i.test(text)) {
     const dec = b64decode(text);
     if (dec) text = dec; // 输入是整段 base64,先解码
   }
@@ -143,6 +166,7 @@ export function parseNodes(input: string): Outbound[] {
     if (line.startsWith("vmess://")) ob = parseVmess(line, i);
     else if (line.startsWith("vless://")) ob = parseVless(line, i);
     else if (line.startsWith("trojan://")) ob = parseTrojan(line, i);
+    else if (line.startsWith("anytls://")) ob = parseAnytls(line, i);
     else if (line.startsWith("ss://")) ob = parseSS(line, i);
     // ssr:// 及其它 → 跳过
     if (ob) { out.push(ob); i++; }
