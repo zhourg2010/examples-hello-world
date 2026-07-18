@@ -204,11 +204,10 @@ export function toSingboxJson(input: string): string {
       { type: "urltest", tag: "auto", outbounds: proxyTags, url: "http://www.gstatic.com/generate_204", interval: "3m", tolerance: 50 },
       ...nodes,
       { type: "direct", tag: "direct" },
-      { type: "dns", tag: "dns-out" },
     ],
     route: {
       rules: [
-        { protocol: "dns", outbound: "dns-out" },
+        { protocol: "dns", action: "hijack-dns" },
         { ip_is_private: true, outbound: "direct" },
       ],
       final: "select",
