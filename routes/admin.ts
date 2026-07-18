@@ -11,18 +11,21 @@ import { sendMail } from "../mail.ts";
 import { dbEnabled, userStats } from "../db.ts";
 import { getRecentLogsForUser } from "../kv.ts";
 import { dashboardPage, html, loginPage, noticeHtml, redirect, userDashboardPage } from "../ui.ts";
+import { computeNodeStats } from "../node-stats.ts";
 
 async function render(origin: string, notice = ""): Promise<Response> {
+  const devices = await listDevices();
+  const nodes = await getNodes();
   return html(dashboardPage({
-    devices: await listDevices(),
-    nodes: await getNodes(),
+    devices,
+    nodes,
     nodesUpdated: await getNodesUpdated(),
+    nodeStats: computeNodeStats(nodes),
     origin,
     hasHistory: (await getNodeHistory()).length > 0,
     notice,
   }));
 }
-
 export async function handleAdmin(req: Request, url: URL): Promise<Response> {
   // 导出备份(GET ?export=1),需登录
   if (req.method === "GET" && url.searchParams.get("export") === "1") {
