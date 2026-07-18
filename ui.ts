@@ -234,9 +234,9 @@ export function dashboardPage(opts: {
   <div class="topbar">
     <div class="brand">proxy-sub</div>
     <nav class="nav">
-      <a data-pane="devices" class="active" onclick="showPane('devices',this)">设备管理</a>
+      <a data-pane="status" class="active" onclick="showPane('status',this)">状态</a>
+      <a data-pane="devices" onclick="showPane('devices',this)">设备管理</a>
       <a data-pane="nodes" onclick="showPane('nodes',this)">节点内容</a>
-      <a data-pane="status" onclick="showPane('status',this)">状态</a>
       <a data-pane="backup" onclick="showPane('backup',this)">备份</a>
       <a data-pane="system" onclick="showPane('system',this)">系统 / 邮件</a>
       <a href="${ADMIN_PATH}/tools" class="tool-link">🧰 工具箱</a>
@@ -245,7 +245,7 @@ export function dashboardPage(opts: {
   ${notice}
   <div class="main">
 
-      <section class="pane active" id="pane-devices">
+      <section class="pane" id="pane-devices">
         <h2>设备管理</h2>
         <form method="post" class="addform"><input type="hidden" name="action" value="add">
           <input name="username" placeholder="用户名(如 dell3600_kingGarden)" required>
@@ -313,7 +313,7 @@ export function dashboardPage(opts: {
         ${hasHistory ? `<form id="restoreForm" method="post" style="display:none"><input type="hidden" name="action" value="restorenodes"></form>` : ""}
       </section>
 
-      <section class="pane" id="pane-status">
+      <section class="pane active" id="pane-status">
         <h2>状态</h2>
 
         <h3 style="font-size:14px;margin:18px 0 8px">本批次(Mac mini 推送)</h3>
