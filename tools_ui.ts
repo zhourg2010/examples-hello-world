@@ -11,10 +11,16 @@ const STYLE = `<style>
   a.back{color:var(--accent);text-decoration:none;font-size:13px;font-weight:600}
   h1{font-size:22px;font-weight:800;letter-spacing:-.01em;margin:16px 0 4px}
   .lead{color:var(--muted);font-size:13px;margin:0 0 20px;line-height:1.6}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
-  .tool{border:2px solid var(--bd);padding:16px;background:#fff}
-  .tool h3{margin:0 0 4px;font-size:15px;font-weight:700}
-  .tool .hint{color:var(--muted);font-size:12px;margin:0 0 10px;line-height:1.5}
+  .tools-layout{display:flex;align-items:stretch;border:2px solid var(--bd);background:#fff;min-height:480px}
+  .tools-nav{width:210px;flex-shrink:0;border-right:2px solid var(--bd);display:flex;flex-direction:column;background:var(--bg)}
+  .tools-nav a{padding:13px 16px;color:var(--fg);text-decoration:none;font-size:13px;font-weight:600;border-bottom:1px solid var(--bd2);cursor:pointer}
+  .tools-nav a:hover{color:var(--accent)}
+  .tools-nav a.active{background:var(--fg);color:#fff;border-bottom-color:var(--fg)}
+  .tools-content{flex:1;padding:20px 24px;min-width:0}
+  .tool-panel{display:none}
+  .tool-panel.active{display:block}
+  .tool-panel h3{margin:0 0 4px;font-size:16px;font-weight:700}
+  .tool-panel .hint{color:var(--muted);font-size:12px;margin:0 0 14px;line-height:1.5}
   textarea,input,select{width:100%;font:inherit;font-size:13px;padding:9px 10px;border:2px solid var(--bd);border-radius:0;outline:none;font-family:ui-monospace,Menlo,monospace;background:#fff;color:var(--fg)}
   textarea:focus,input:focus,select:focus{border-color:var(--accent)}
   textarea{resize:vertical;line-height:1.5}
@@ -23,10 +29,15 @@ const STYLE = `<style>
   button:hover{background:var(--fg);color:#fff}
   button.p{background:var(--fg);color:#fff;border-color:var(--fg)}
   button.p:hover{background:var(--accent);border-color:var(--accent)}
-  .out{margin-top:8px;background:var(--bg);border:2px solid var(--bd2);padding:10px;font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;min-height:20px;max-height:260px;overflow:auto}
+  .out{margin-top:8px;background:var(--bg);border:2px solid var(--bd2);padding:10px;font-family:ui-monospace,Menlo,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;min-height:20px;max-height:320px;overflow:auto}
   .out.err{color:#a3200f;background:#fdeceb;border-color:var(--accent)}
   label{font-size:12px;color:var(--muted)}
   .mini{font-size:12px;color:var(--muted)}
+  @media(max-width:680px){
+    .tools-layout{flex-direction:column}
+    .tools-nav{width:100%;flex-direction:row;flex-wrap:wrap;border-right:none;border-bottom:2px solid var(--bd)}
+    .tools-nav a{border-bottom:none;border-right:1px solid var(--bd2)}
+  }
 </style>`;
 
 export function toolsPage(): string {
@@ -34,94 +45,119 @@ export function toolsPage(): string {
   <a class="back" href="${ADMIN_PATH}">← 返回后台</a>
   <h1>工具箱</h1>
   <p class="lead">全部工具在你的浏览器本地运行,输入内容不会发送到服务器或任何第三方。</p>
-  <div class="grid">
 
-    <div class="tool">
-      <h3>Base64 编解码</h3>
-      <p class="hint">支持 UTF-8 中文;勾选 URL-safe 处理 -_ 变体。</p>
-      <textarea id="b64in" rows="3" placeholder="输入文本或 Base64"></textarea>
-      <div class="row">
-        <button class="p" onclick="b64('enc')">编码 →</button>
-        <button class="p" onclick="b64('dec')">← 解码</button>
-        <label><input type="checkbox" id="b64url" style="width:auto"> URL-safe</label>
+  <div class="tools-layout">
+    <nav class="tools-nav">
+      <a data-tool="b64" class="active" onclick="showTool('b64',this)">Base64 编解码</a>
+      <a data-tool="node" onclick="showTool('node',this)">节点链接解析</a>
+      <a data-tool="jwt" onclick="showTool('jwt',this)">JWT 解码</a>
+      <a data-tool="hash" onclick="showTool('hash',this)">哈希 / HMAC</a>
+      <a data-tool="aes" onclick="showTool('aes',this)">AES 加解密</a>
+      <a data-tool="json" onclick="showTool('json',this)">JSON 格式化</a>
+      <a data-tool="regex" onclick="showTool('regex',this)">正则测试</a>
+      <a data-tool="xray" onclick="showTool('xray',this)">编码透视</a>
+    </nav>
+
+    <div class="tools-content">
+
+      <div class="tool-panel active" id="tool-b64">
+        <h3>Base64 编解码</h3>
+        <p class="hint">支持 UTF-8 中文;勾选 URL-safe 处理 -_ 变体。</p>
+        <textarea id="b64in" rows="3" placeholder="输入文本或 Base64"></textarea>
+        <div class="row">
+          <button class="p" onclick="b64('enc')">编码 →</button>
+          <button class="p" onclick="b64('dec')">← 解码</button>
+          <label><input type="checkbox" id="b64url" style="width:auto"> URL-safe</label>
+        </div>
+        <div class="out" id="b64out"></div>
       </div>
-      <div class="out" id="b64out"></div>
-    </div>
 
-    <div class="tool">
-      <h3>节点链接解析</h3>
-      <p class="hint">粘一条 vmess:// vless:// trojan:// anytls:// ss:// 看里面的字段。</p>
-      <textarea id="nodein" rows="3" placeholder="vmess://..."></textarea>
-      <div class="row"><button class="p" onclick="parseNode()">解析</button></div>
-      <div class="out" id="nodeout"></div>
-    </div>
-
-    <div class="tool">
-      <h3>JWT 解码</h3>
-      <p class="hint">解出 header / payload,不验证签名。本地解码。</p>
-      <textarea id="jwtin" rows="3" placeholder="eyJhbGciOi..."></textarea>
-      <div class="row"><button class="p" onclick="jwt()">解码</button></div>
-      <div class="out" id="jwtout"></div>
-    </div>
-
-    <div class="tool">
-      <h3>哈希 / HMAC</h3>
-      <p class="hint">SHA-1/256/384/512。填密钥则算 HMAC。</p>
-      <textarea id="hin" rows="2" placeholder="要哈希的文本"></textarea>
-      <div class="row">
-        <select id="halg" style="width:auto">
-          <option>SHA-256</option><option>SHA-1</option><option>SHA-384</option><option>SHA-512</option>
-        </select>
-        <input id="hkey" placeholder="HMAC 密钥(可空)" style="flex:1;min-width:120px">
-        <button class="p" onclick="hash()">计算</button>
+      <div class="tool-panel" id="tool-node">
+        <h3>节点链接解析</h3>
+        <p class="hint">粘一条 vmess:// vless:// trojan:// anytls:// ss:// 看里面的字段。</p>
+        <textarea id="nodein" rows="3" placeholder="vmess://..."></textarea>
+        <div class="row"><button class="p" onclick="parseNode()">解析</button></div>
+        <div class="out" id="nodeout"></div>
       </div>
-      <div class="out" id="hout"></div>
-    </div>
 
-    <div class="tool">
-      <h3>AES 加解密</h3>
-      <p class="hint">AES-GCM + 口令(PBKDF2)。密文含盐和 IV,可跨次解密。</p>
-      <textarea id="aesin" rows="2" placeholder="明文 或 密文(Base64)"></textarea>
-      <input id="aespw" type="password" placeholder="口令" style="margin-top:6px">
-      <div class="row">
-        <button class="p" onclick="aes('enc')">加密 →</button>
-        <button class="p" onclick="aes('dec')">← 解密</button>
+      <div class="tool-panel" id="tool-jwt">
+        <h3>JWT 解码</h3>
+        <p class="hint">解出 header / payload,不验证签名。本地解码。</p>
+        <textarea id="jwtin" rows="3" placeholder="eyJhbGciOi..."></textarea>
+        <div class="row"><button class="p" onclick="jwt()">解码</button></div>
+        <div class="out" id="jwtout"></div>
       </div>
-      <div class="out" id="aesout"></div>
-    </div>
 
-    <div class="tool">
-      <h3>JSON 格式化 / 压缩</h3>
-      <p class="hint">美化展开或压成一行。</p>
-      <textarea id="jin" rows="4" placeholder='{"a":1}'></textarea>
-      <div class="row">
-        <button class="p" onclick="jsonfmt('pretty')">格式化</button>
-        <button class="p" onclick="jsonfmt('min')">压缩</button>
+      <div class="tool-panel" id="tool-hash">
+        <h3>哈希 / HMAC</h3>
+        <p class="hint">SHA-1/256/384/512。填密钥则算 HMAC。</p>
+        <textarea id="hin" rows="2" placeholder="要哈希的文本"></textarea>
+        <div class="row">
+          <select id="halg" style="width:auto">
+            <option>SHA-256</option><option>SHA-1</option><option>SHA-384</option><option>SHA-512</option>
+          </select>
+          <input id="hkey" placeholder="HMAC 密钥(可空)" style="flex:1;min-width:120px">
+          <button class="p" onclick="hash()">计算</button>
+        </div>
+        <div class="out" id="hout"></div>
       </div>
-      <div class="out" id="jout"></div>
-    </div>
 
-    <div class="tool">
-      <h3>正则测试</h3>
-      <p class="hint">实时匹配,显示命中项与分组。</p>
-      <div class="row">
-        <input id="rePat" placeholder="正则,如 \\d+" style="flex:1" oninput="regex()">
-        <input id="reFlags" placeholder="flags 如 gi" style="width:90px" oninput="regex()">
+      <div class="tool-panel" id="tool-aes">
+        <h3>AES 加解密</h3>
+        <p class="hint">AES-GCM + 口令(PBKDF2)。密文含盐和 IV,可跨次解密。</p>
+        <textarea id="aesin" rows="2" placeholder="明文 或 密文(Base64)"></textarea>
+        <input id="aespw" type="password" placeholder="口令" style="margin-top:6px">
+        <div class="row">
+          <button class="p" onclick="aes('enc')">加密 →</button>
+          <button class="p" onclick="aes('dec')">← 解密</button>
+        </div>
+        <div class="out" id="aesout"></div>
       </div>
-      <textarea id="reText" rows="3" placeholder="测试文本" oninput="regex()"></textarea>
-      <div class="out" id="reout"></div>
-    </div>
 
-    <div class="tool">
-      <h3>编码透视</h3>
-      <p class="hint">一段文本的 Hex / Base64 / URL / Unicode / 字节数。</p>
-      <textarea id="xin" rows="2" placeholder="输入文本" oninput="xray()"></textarea>
-      <div class="out" id="xout"></div>
-    </div>
+      <div class="tool-panel" id="tool-json">
+        <h3>JSON 格式化 / 压缩</h3>
+        <p class="hint">美化展开或压成一行。</p>
+        <textarea id="jin" rows="4" placeholder='{"a":1}'></textarea>
+        <div class="row">
+          <button class="p" onclick="jsonfmt('pretty')">格式化</button>
+          <button class="p" onclick="jsonfmt('min')">压缩</button>
+        </div>
+        <div class="out" id="jout"></div>
+      </div>
 
+      <div class="tool-panel" id="tool-regex">
+        <h3>正则测试</h3>
+        <p class="hint">实时匹配,显示命中项与分组。</p>
+        <div class="row">
+          <input id="rePat" placeholder="正则,如 \\d+" style="flex:1" oninput="regex()">
+          <input id="reFlags" placeholder="flags 如 gi" style="width:90px" oninput="regex()">
+        </div>
+        <textarea id="reText" rows="3" placeholder="测试文本" oninput="regex()"></textarea>
+        <div class="out" id="reout"></div>
+      </div>
+
+      <div class="tool-panel" id="tool-xray">
+        <h3>编码透视</h3>
+        <p class="hint">一段文本的 Hex / Base64 / URL / Unicode / 字节数。</p>
+        <textarea id="xin" rows="2" placeholder="输入文本" oninput="xray()"></textarea>
+        <div class="out" id="xout"></div>
+      </div>
+
+    </div>
   </div>
 
 <script>
+function showTool(name, el){
+  document.querySelectorAll('.tool-panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('tool-'+name).classList.add('active');
+  document.querySelectorAll('.tools-nav a').forEach(a=>a.classList.remove('active'));
+  el.classList.add('active');
+  try{ history.replaceState(null,'','#'+name); }catch(e){}
+}
+(function(){
+  const h=(location.hash||'').replace('#','');
+  if(h){ const el=document.querySelector('.tools-nav a[data-tool="'+h+'"]'); if(el) showTool(h,el); }
+})();
 const $=id=>document.getElementById(id);
 function show(id,txt,err){const e=$(id);e.textContent=txt;e.classList.toggle('err',!!err);}
 const enc=new TextEncoder(), dec=new TextDecoder();

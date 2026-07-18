@@ -4,6 +4,7 @@
 
 import { ADMIN_EMAIL } from "./config.ts";
 import type { Device } from "./kv.ts";
+import type { NodeStats } from "./node-stats.ts";
 
 export function escapeHtml(s: unknown): string {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -136,11 +137,12 @@ export function dashboardPage(opts: {
   devices: Device[];
   nodes: string;
   nodesUpdated: number;
+  nodeStats: NodeStats;
   origin: string;
   hasHistory: boolean;
   notice?: string;
 }): string {
-  const { devices, nodes, nodesUpdated, origin, hasHistory, notice = "" } = opts;
+  const { devices, nodes, nodesUpdated, nodeStats, origin, hasHistory, notice = "" } = opts;
 
   const rows = devices.map((d) => {
     const link = `${origin}/l/${encodeURIComponent(d.username)}/${d.id}`;
@@ -186,6 +188,7 @@ export function dashboardPage(opts: {
     <nav class="nav">
       <a data-pane="devices" class="active" onclick="showPane('devices',this)">设备管理</a>
       <a data-pane="nodes" onclick="showPane('nodes',this)">节点内容</a>
+      <a data-pane="status" onclick="showPane('status',this)">状态</a>
       <a data-pane="backup" onclick="showPane('backup',this)">备份</a>
       <a data-pane="system" onclick="showPane('system',this)">系统 / 邮件</a>
       <a href="${ADMIN_PATH}/tools" class="tool-link">🧰 工具箱</a>
@@ -241,6 +244,36 @@ export function dashboardPage(opts: {
           ${hasHistory ? `<button type="button" class="ghost" onclick="if(confirm('恢复到上一版节点?当前内容会被替换。'))document.getElementById('restoreForm').submit()">恢复上一版</button>` : ""}
         </form>
         ${hasHistory ? `<form id="restoreForm" method="post" style="display:none"><input type="hidden" name="action" value="restorenodes"></form>` : ""}
+      </section>
+
+      <section class="pane" id="pane-status">
+        <h2>状态</h2>
+
+        <h3 style="font-size:14px;margin:18px 0 8px">本批次(Mac mini 推送)</h3>
+        <div class="tablewrap"><table>
+          <tr><th style="width:180px">批次标签</th><td>${nodeStats.batchLabel ? escapeHtml(nodeStats.batchLabel) : "<span style='color:var(--muted)'>暂无(还没推送过)</span>"}</td></tr>
+          <tr><th>Deno 收到时间</th><td>${nodesUpdated ? `${timeAgo(nodesUpdated)} · ${new Date(nodesUpdated).toLocaleString("zh-CN")}` : "—"}</td></tr>
+          <tr><th>节点数(不含时间戳假节点)</th><td><strong>${nodeStats.total}</strong> 个 — vless <strong>${nodeStats.vless}</strong> · anytls <strong>${nodeStats.anytls}</strong> · trojan <strong>${nodeStats.trojan}</strong></td></tr>
+        </table></div>
+        ${nodeStats.batchLabel && nodeStats.batchLabel.includes("⚠") ? `<div class="notice bad" style="margin-top:12px">这批节点里有协议在吃缓存兜底(标签里带 ⚠),说明 Mac mini 上一轮该协议没测出新节点。</div>` : ""}
+
+        <h3 style="font-size:14px;margin:24px 0 8px">服务器</h3>
+        <div class="tablewrap"><table>
+          <tr><th style="width:180px">部署地址</th><td class="url" style="max-width:none">${escapeHtml(origin)}</td></tr>
+          <tr><th>当前服务器时间</th><td>${new Date().toLocaleString("zh-CN")}</td></tr>
+          <tr><th>设备总数</th><td>${devices.length} 个(启用 ${devices.filter((d) => d.enabled).length} 个)</td></tr>
+        </table></div>
+
+        <h3 style="font-size:14px;margin:24px 0 8px">设备访问一览</h3>
+        <div class="tablewrap"><table><tr><th>用户名</th><th>备注</th><th>状态</th><th>累计次数</th><th>最近访问</th></tr>
+          ${devices.length ? devices.map((d) => `<tr>
+            <td><strong>${escapeHtml(d.username)}</strong></td>
+            <td style="color:var(--muted)">${escapeHtml(d.note)}</td>
+            <td><span class="status ${d.enabled ? "on" : "off"}">${d.enabled ? "启用" : "停用"}</span></td>
+            <td>${d.hits ?? 0}</td>
+            <td class="hits">${timeAgo(d.lastSeen)}</td>
+          </tr>`).join("") : `<tr><td colspan="5" style="color:var(--muted)">暂无设备</td></tr>`}
+        </table></div>
       </section>
 
       <section class="pane" id="pane-backup">
