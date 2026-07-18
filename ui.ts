@@ -53,10 +53,10 @@ const STYLE = `<style>
   td{border-top:1px solid var(--bd2);padding:12px;vertical-align:middle}
   tr:hover td{background:#faf9f8}
   .url{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--muted);max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;min-width:230px}
-  .actions>form,.actions>a{margin:0;display:block}
+  .actions{display:flex;flex-wrap:wrap;gap:6px;max-width:280px}
+  .actions>form,.actions>a{margin:0;display:inline-block}
   .actions a{text-decoration:none}
-  .actions button{width:100%;font-size:11px;padding:7px 2px;height:32px}
+  .actions button{font-size:11px;padding:6px 9px;height:auto;white-space:nowrap}
   .tablewrap{overflow-x:auto}
   .status{display:inline-block;padding:3px 10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;border:1.5px solid var(--bd)}
   .status.on{background:#eaf6ee;color:var(--ok);border-color:var(--ok)}
@@ -146,6 +146,12 @@ const CLIENT_TAG_LIST: { tag: string; label: string }[] = [
 
 const FORMAT_LABEL: Record<string, string> = { base64: "base64", singbox: "sing-box", clash: "clash" };
 
+function tagNodeCount(tag: string, stats: NodeStats): number {
+  // v2box/v2rayn 标签只保留 vless+trojan(不支持 anytls);其余标签是全协议池
+  if (tag === "v2box" || tag === "v2rayn") return stats.vless + stats.trojan;
+  return stats.total;
+}
+
 export function dashboardPage(opts: {
   devices: Device[];
   nodes: string;
@@ -161,12 +167,15 @@ export function dashboardPage(opts: {
     const link = `${origin}/l/${encodeURIComponent(d.username)}/${d.id}`;
     const j = JSON.stringify(link);
     const fmt = d.format ?? "base64";
-    const tagLinks = CLIENT_TAG_LIST.map(({ tag, label }) => {
+    const detailId = `taglinks-${d.id}`;
+    const tagRows = CLIENT_TAG_LIST.map(({ tag, label }) => {
       const tagLink = `${link}/${tag}`;
       const tj = JSON.stringify(tagLink);
-      return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
-        <span style="min-width:150px;color:var(--muted);font-size:12px">${label}</span>
-        <code style="font-size:11px;flex:1;overflow:auto">${tagLink}</code>
+      const count = tagNodeCount(tag, nodeStats);
+      return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--bd2)">
+        <span style="min-width:170px;font-weight:600;font-size:12px">${label}</span>
+        <code style="font-size:11px;flex:1;overflow:auto;color:var(--muted)">${tagLink}</code>
+        <span class="tag" style="flex-shrink:0">${count} 个有效节点</span>
         <button type="button" class="ghost" onclick='copyLink(${tj},this)'>复制</button>
       </div>`;
     }).join("");
@@ -176,19 +185,24 @@ export function dashboardPage(opts: {
       <td><span class="status ${d.enabled ? "on" : "off"}">${d.enabled ? "启用" : "停用"}</span></td>
       <td><span class="tag">${FORMAT_LABEL[fmt]}(默认)</span></td>
       <td class="hits">${timeAgo(d.lastSeen)}<br><span style="opacity:.7">共 ${d.hits ?? 0} 次</span></td>
-      <td class="url">${link}</td>
       <td><div class="actions">
         <button type="button" class="ghost" onclick='copyLink(${j},this)'>复制</button>
         <button type="button" class="ghost" onclick='showQR(${j})'>二维码</button>
         <a href="?user=${encodeURIComponent(d.username)}"><button type="button" class="ghost">详情</button></a>
+        <button type="button" class="ghost" onclick="toggleDeviceDetail('${detailId}')">标签链接</button>
         <form method="post"><input type="hidden" name="action" value="switchformat"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" title="当前默认 ${FORMAT_LABEL[fmt]},点击切换(不带标签的旧链接会跟着变)">默认格式</button></form>
         <form method="post"><input type="hidden" name="action" value="rotate"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" onclick="return confirm('换链接后旧链接立即失效,需重新发给对方。继续?')">换链接</button></form>
         <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost">${d.enabled ? "停用" : "启用"}</button></form>
         <form method="post" onsubmit="return confirm('删除 ${escapeHtml(d.username)} ?')"><input type="hidden" name="action" value="del"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="danger">删除</button></form>
-      </div>
-      <details style="margin-top:8px"><summary style="cursor:pointer;color:var(--muted);font-size:12px">按客户端类型的标签链接 ▾</summary>
-        <div style="margin-top:6px">${tagLinks}</div>
-      </details></td></tr>`;
+      </div></td></tr>
+      <tr class="device-detail-tr" id="${detailId}" style="display:none">
+        <td colspan="6" style="background:var(--bg);padding:14px 20px 16px">
+          <div style="margin-left:22px;border-left:3px solid var(--bd);padding-left:16px">
+            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:6px">按客户端类型的标签链接</div>
+            ${tagRows}
+          </div>
+        </td>
+      </tr>`;
   }).join("");
 
   const updatedText = nodesUpdated
@@ -221,8 +235,8 @@ export function dashboardPage(opts: {
             <option value="clash">clash(OpenClash/mihomo)</option>
           </select>
           <button>添加设备</button></form>
-        <div class="tablewrap"><table><tr><th>用户名</th><th>备注</th><th>状态</th><th>格式</th><th>最近访问</th><th>订阅链接</th><th>操作</th></tr>
-          ${rows || `<tr><td colspan="7" style="color:var(--muted)">暂无设备</td></tr>`}</table></div>
+        <div class="tablewrap"><table><tr><th>用户名</th><th>备注</th><th>状态</th><th>格式</th><th>最近访问</th><th>操作</th></tr>
+          ${rows || `<tr><td colspan="6" style="color:var(--muted)">暂无设备</td></tr>`}</table></div>
       </section>
 
       <section class="pane" id="pane-nodes">
@@ -347,6 +361,12 @@ export function dashboardPage(opts: {
     const h=(location.hash||'').replace('#','');
     if(h){ const el=document.querySelector('.nav a[data-pane="'+h+'"]'); if(el) showPane(h,el); }
   })();
+  function toggleDeviceDetail(id){
+    const target = document.getElementById(id);
+    const isOpen = target.style.display !== 'none';
+    document.querySelectorAll('.device-detail-tr').forEach(tr=>{ tr.style.display='none'; });
+    target.style.display = isOpen ? 'none' : 'table-row';
+  }
   async function copyLink(text, btn){
     try{ await navigator.clipboard.writeText(text); }
     catch(e){ const t=document.createElement('textarea');t.value=text;document.body.appendChild(t);t.select();try{document.execCommand('copy');}catch(_){}document.body.removeChild(t); }
