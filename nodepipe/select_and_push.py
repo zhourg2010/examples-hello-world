@@ -16,6 +16,9 @@ import urllib.parse
 import urllib.request
 import urllib.error
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import node_cache
+
 PUSH_URL = os.environ.get("PUSH_URL", "").strip()
 PUSH_KEY = os.environ.get("PUSH_KEY", "").strip()
 OUTPUT = os.environ.get("SUBS_OUTPUT", os.path.expanduser("~/nodepipe/bin/output/all.yaml"))
@@ -254,6 +257,15 @@ def main():
         log("No vless/anytls/trojan nodes in output. Nothing to push.")
         sys.exit(0)
 
+    # 记一笔"这些节点这次也出现了"——给"连接稳定性/寿命"这个维度用。
+    # 记的是全体候选(不只是最后选中的),这样即使某个节点这次没被选中,
+    # 它的出现历史也不会断。stats 失败不影响主流程(比如db文件被锁一次)。
+    try:
+        stability_stats = node_cache.record_and_stats(candidates)
+    except Exception as e:
+        log(f"WARN: node_cache failed, skipping stability badges: {e}")
+        stability_stats = {}
+
     # 两个独立配额桶:vless 一桶,anytls+trojan 合并一桶("其他")。
     # 各自按地区优先级排序、各自截取,互相不补齐——某一桶不够就是不够。
     vless_pool = [p for p in candidates if p.get("type") == "vless"]
@@ -262,6 +274,18 @@ def main():
     other_pool.sort(key=lambda p: region_rank(str(p.get("name", ""))))
     vless_picked = vless_pool[:PICK_VLESS]
     other_picked = other_pool[:PICK_OTHER]
+
+    def attach_stability_badge(picked_list):
+        for p in picked_list:
+            ident = node_cache.identity_of(str(p.get("type", "")), str(p.get("server", "")), p.get("port", ""))
+            s = stability_stats.get(ident)
+            if not s:
+                continue
+            badge = f"⏱{s['first_seen_days_ago']}天{s['appearances']}次"
+            p["name"] = f"{p.get('name', '')}|{badge}"
+
+    attach_stability_badge(vless_picked)
+    attach_stability_badge(other_picked)
 
     def build_list(picked_list):
         out = []

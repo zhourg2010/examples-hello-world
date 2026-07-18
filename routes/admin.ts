@@ -26,6 +26,7 @@ async function render(origin: string, notice = ""): Promise<Response> {
     notice,
   }));
 }
+
 export async function handleAdmin(req: Request, url: URL): Promise<Response> {
   // 导出备份(GET ?export=1),需登录
   if (req.method === "GET" && url.searchParams.get("export") === "1") {

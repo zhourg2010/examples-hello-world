@@ -13,7 +13,7 @@ case "$MODE" in
   full)
     MINSPEED="128"; SPEEDURL="https://speed.cloudflare.com/__down?bytes=20000000"; DLMB="10"
     MEDIA="true"; RENAME="true"; KEEPDAYS="28"
-    PLATFORMS=$'platforms:\n  - iprisk\n  - claude'
+    PLATFORMS=$'platforms:\n  - iprisk\n  - claude\n  - openai\n  - gemini'
     FILTER=$'filter:\n  - "CL-"'
     CALLBACK="callback-script: \"$HOME/nodepipe/select_and_push.sh\""
     CRON='cron-expression: "0 6,19 * * *"' ;;

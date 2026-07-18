@@ -88,17 +88,24 @@ const STYLE = `<style>
   .pane{display:none}
   .pane.active{display:block}
   .pane h2:first-child{margin-top:0}
-  #node-list{border:2px solid var(--bd);max-height:520px;overflow-y:auto;background:#fff}
-  .node-row{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--bd2);font-size:12px}
-  .node-row:last-child{border-bottom:none}
-  .node-row.off{opacity:.45;background:var(--bg)}
-  .node-row input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;flex-shrink:0}
-  .node-row .mv{display:flex;flex-direction:column;gap:1px;flex-shrink:0}
-  .node-row .mv button{padding:0 5px;font-size:9px;height:15px;line-height:13px;border-width:1px}
-  .node-row .proto-badge{font-size:10px;font-weight:700;padding:2px 6px;border:1.5px solid var(--bd);flex-shrink:0;text-transform:uppercase;background:var(--fg);color:#fff}
-  .node-row .name{flex:1;overflow:hidden;white-space:nowrap;display:flex;gap:4px;align-items:center}
-  .node-row .name b{background:var(--bg);border:1px solid var(--bd2);padding:0 5px;font-weight:600;white-space:nowrap;font-size:11px;flex-shrink:0}
-  .node-row .toggle-off{flex-shrink:0;font-size:10px;padding:4px 8px;height:auto}
+  #node-table-wrap{border:2px solid var(--bd);max-height:560px;overflow:auto;background:#fff}
+  #node-table{width:100%;border-collapse:collapse;font-size:12px}
+  #node-table thead th{position:sticky;top:0;background:var(--fg);color:#fff;text-align:left;padding:8px 10px;font-size:11px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;user-select:none;z-index:1}
+  #node-table thead th.sortable{cursor:pointer}
+  #node-table thead th.sortable:hover{color:var(--accent)}
+  #node-table thead th .arrow{display:inline-block;width:10px}
+  #node-table tbody td{padding:6px 10px;border-top:1px solid var(--bd2);vertical-align:middle}
+  #node-table tbody tr.off{opacity:.4;background:var(--bg)}
+  #node-table tbody tr.drag-over{outline:2px dashed var(--accent);outline-offset:-2px}
+  #node-table .mono{font-family:ui-monospace,Menlo,monospace}
+  #node-table input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
+  .drag-handle{cursor:grab;display:inline-flex;flex-direction:column;gap:2px;padding:4px 2px;user-select:none}
+  .drag-handle span{display:block;width:14px;height:2px;background:var(--muted)}
+  .proto-badge{font-size:10px;font-weight:700;padding:2px 6px;border:1.5px solid var(--bd);white-space:nowrap;text-transform:uppercase;background:var(--fg);color:#fff}
+  .area-badge{font-size:11px}
+  .speed-badge{font-size:11px;color:var(--muted)}
+  .row-actions{display:flex;gap:4px;white-space:nowrap;align-items:center}
+  .row-actions button{padding:3px 7px;font-size:10px;height:auto}
   @media(max-width:720px){
     .topbar{flex-direction:column;align-items:flex-start}
     .brand{padding-bottom:8px}
@@ -225,9 +232,9 @@ export function dashboardPage(opts: {
           <span id="dirty-badge" class="tag tag-accent" style="display:none;margin-left:8px">未保存</span>
         </p>
         <p class="sub" style="margin-bottom:14px">
-          名字里的信息是 Mac mini 测速时写进去的(测速/风险等,视 subs-check 配置而定)。
-          用 ↑↓ 手动排序——想让哪个排最前就把它挪到最上面,不一定是测速最快的那个。
-          "停用"的节点会自动沉到列表最后,并且<strong>不会再推给任何客户端</strong>(不是只在这里看不见,是真的从订阅内容里拿掉),随时可以再启用。
+          点表头按那一列排序(协议/Server/Port/地区/速度/安全,再点一次反向)。操作列里的 ▲▼ 单步移动,☰ 可以直接拖拽——都只在启用组或停用组内部生效,想让哪个排最前就挪到最上面,不一定是速度最快的那个。
+          "停用"的节点会自动沉到最后,并且<strong>不会再推给任何客户端</strong>(真的从订阅内容里拿掉,不是只在这里看不见),随时可以再启用。
+          "解析"跳转到工具箱的节点链接解析,看完可以返回这里(未保存的改动会先提醒你)。
         </p>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
@@ -236,7 +243,21 @@ export function dashboardPage(opts: {
           <button type="button" class="danger" onclick="deleteSelectedNodes()">删除选中(<span id="sel-count">0</span>)</button>
         </div>
 
-        <div id="node-list"></div>
+        <div id="node-table-wrap">
+          <table id="node-table">
+            <thead><tr>
+              <th style="width:26px"></th>
+              <th class="sortable" onclick="sortBy('protocol')">协议<span class="arrow" id="arrow-protocol"></span></th>
+              <th class="sortable" onclick="sortBy('server')">Server<span class="arrow" id="arrow-server"></span></th>
+              <th class="sortable" onclick="sortBy('port')">Port<span class="arrow" id="arrow-port"></span></th>
+              <th class="sortable" onclick="sortBy('area')">地区<span class="arrow" id="arrow-area"></span></th>
+              <th class="sortable" onclick="sortBy('speed')">速度<span class="arrow" id="arrow-speed"></span></th>
+              <th class="sortable" onclick="sortBy('security')">安全<span class="arrow" id="arrow-security"></span></th>
+              <th style="width:250px">操作</th>
+            </tr></thead>
+            <tbody id="node-tbody"></tbody>
+          </table>
+        </div>
 
         <h2 style="font-size:15px;margin-top:24px">追加节点</h2>
         <p class="sub" style="margin-bottom:8px">粘贴一条或多条节点链接,一行一个。会自动跳过与已有列表重复的,追加的节点默认排在启用组最后面。</p>
@@ -370,62 +391,144 @@ export function dashboardPage(opts: {
     const m = uri.match(/^([a-zA-Z0-9]+):\\/\\//);
     const proto = m ? m[1] : '?';
     const h = uri.indexOf('#');
-    let name = h>=0 ? uri.slice(h+1) : '(无名字)';
+    let name = h>=0 ? uri.slice(h+1) : '';
     try{ name = decodeURIComponent(name); }catch(e){}
     return { proto, name };
+  }
+
+  // 从 URI 里抠出 server/port/security,以及从名字里抠出地区/速度,给表格列和排序用。
+  // vmess:// 整段是 base64 JSON,不是标准 URL,单独处理;vless/trojan/anytls 都是标准 URL 能直接解析。
+  function parseNodeFields(item){
+    const uri = item.uri;
+    const { proto, name } = parseNodeDisplay(uri);
+    const badges = name.split('|').map(s=>s.trim()).filter(Boolean);
+    const area = badges[0] || '-';
+    const speedBadge = badges.find(b=>/\\d+(\\.\\d+)?\\s*[KMGT]?B\\/s/i.test(b)) || '-';
+    let server='-', port='', security='-';
+    if(proto==='vmess'){
+      try{
+        const j = JSON.parse(b64dec.decode(fromB64(uri.slice(8))));
+        server = j.add||'-'; port = j.port||''; security = j.tls==='tls'?'tls':'none';
+      }catch(e){}
+    }else{
+      try{
+        const u = new URL(uri);
+        server = u.hostname||'-'; port = u.port||'';
+        if(proto==='vless') security = u.searchParams.get('security')||'none';
+        else if(proto==='trojan'||proto==='anytls') security = 'tls';
+        else if(proto==='ss') security = '-';
+      }catch(e){}
+    }
+    return { proto, server, port: port?Number(port):0, area, speed: speedBadge, security, name };
+  }
+  function speedSortValue(s){
+    const m = String(s).match(/(\\d+(?:\\.\\d+)?)\\s*([KMGT]?)B\\/s/i);
+    if(!m) return -1;
+    const n = parseFloat(m[1]); const unit = m[2].toUpperCase();
+    const mult = unit==='G'?1024*1024 : unit==='M'?1024 : unit==='K'?1 : 1/1024;
+    return n*mult;
   }
 
   const INITIAL_NODES = ${JSON.stringify(nodes)};
   let nodeLines = decodeNodesBlob(INITIAL_NODES);
   let dirty = false;
+  let sortCol = null, sortDir = 1;
+  let dragSrc = null;
 
   function markDirty(){ dirty = true; document.getElementById('dirty-badge').style.display='inline-block'; }
 
   // 保证不变量:启用的节点都排在停用的节点前面(组内相对顺序不变——JS sort 是稳定排序)
   function settleGroups(){ nodeLines.sort((a,b)=>(a.disabled?1:0)-(b.disabled?1:0)); }
 
+  function sortBy(col){
+    if(sortCol===col) sortDir = -sortDir; else { sortCol = col; sortDir = 1; }
+    nodeLines.sort((a,b)=>{
+      const fa = parseNodeFields(a), fb = parseNodeFields(b);
+      let va = fa[col], vb = fb[col];
+      if(col==='speed'){ va = speedSortValue(fa.speed); vb = speedSortValue(fb.speed); }
+      if(typeof va==='number' && typeof vb==='number') return (va-vb)*sortDir;
+      return String(va).localeCompare(String(vb))*sortDir;
+    });
+    markDirty();
+    renderNodeList();
+  }
+
+  function escAttr(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+
   function renderNodeList(){
     settleGroups();
-    const box = document.getElementById('node-list');
-    box.innerHTML = nodeLines.map((item,i)=>{
-      const { proto, name } = parseNodeDisplay(item.uri);
-      const badges = name.split('|').map(s=>s.trim()).filter(Boolean).map(s=>'<b>'+s.replace(/</g,'&lt;')+'</b>').join('');
+    document.querySelectorAll('#node-table .arrow').forEach(a=>a.textContent='');
+    if(sortCol){ const a=document.getElementById('arrow-'+sortCol); if(a) a.textContent = sortDir>0?'▲':'▼'; }
+
+    const tbody = document.getElementById('node-tbody');
+    tbody.innerHTML = nodeLines.map((item,i)=>{
+      const f = parseNodeFields(item);
       const upDisabled = i===0 || nodeLines[i-1].disabled !== item.disabled;
       const downDisabled = i===nodeLines.length-1 || nodeLines[i+1].disabled !== item.disabled;
-      return '<div class="node-row'+(item.disabled?' off':'')+'" title="'+item.uri.replace(/"/g,'&quot;')+'">'
-        + '<input type="checkbox" data-i="'+i+'" onchange="updateSelCount()">'
-        + '<span class="mv"><button type="button" '+(upDisabled?'disabled':'')+' onclick="moveNode('+i+',-1)">▲</button>'
-        + '<button type="button" '+(downDisabled?'disabled':'')+' onclick="moveNode('+i+',1)">▼</button></span>'
-        + '<span class="proto-badge">'+proto+'</span>'
-        + '<span class="name">'+(badges||'<b>'+name.replace(/</g,'&lt;')+'</b>')+'</span>'
-        + '<button type="button" class="ghost toggle-off" onclick="toggleDisableNode('+i+')">'+(item.disabled?'启用':'停用')+'</button>'
-        + '</div>';
+      return '<tr class="'+(item.disabled?'off':'')+'" draggable="false" data-i="'+i+'" data-uri="'+escAttr(item.uri)+'"'
+        + ' ondragover="event.preventDefault();this.classList.add(\\'drag-over\\')"'
+        + ' ondragleave="this.classList.remove(\\'drag-over\\')"'
+        + ' ondragstart="handleDragStart(event)" ondrop="handleDrop(event)" ondragend="handleDragEnd(event)">'
+        + '<td><input type="checkbox" data-i="'+i+'" onchange="updateSelCount()"></td>'
+        + '<td><span class="proto-badge">'+f.proto+'</span></td>'
+        + '<td class="mono">'+escAttr(f.server)+'</td>'
+        + '<td class="mono">'+(f.port||'-')+'</td>'
+        + '<td class="area-badge">'+escAttr(f.area)+'</td>'
+        + '<td class="speed-badge">'+escAttr(f.speed)+'</td>'
+        + '<td>'+escAttr(f.security)+'</td>'
+        + '<td><div class="row-actions">'
+        +   '<button type="button" class="ghost" onclick="copyLink(this.closest(\\'tr\\').dataset.uri,this)">复制</button>'
+        +   '<button type="button" class="ghost" onclick="goParse(this.closest(\\'tr\\').dataset.uri)">解析</button>'
+        +   '<button type="button" class="ghost" '+(upDisabled?'disabled':'')+' onclick="moveNode('+i+',-1)">▲</button>'
+        +   '<button type="button" class="ghost" '+(downDisabled?'disabled':'')+' onclick="moveNode('+i+',1)">▼</button>'
+        +   '<span class="drag-handle" onmousedown="this.closest(\\'tr\\').draggable=true" onmouseup="this.closest(\\'tr\\').draggable=false"><span></span><span></span><span></span></span>'
+        +   '<button type="button" class="ghost" onclick="toggleDisableNode('+i+')">'+(item.disabled?'启用':'停用')+'</button>'
+        + '</div></td>'
+        + '</tr>';
     }).join('');
     document.getElementById('node-count').textContent = nodeLines.length;
     updateSelCount();
-  }
-  function updateSelCount(){
-    const n = document.querySelectorAll('#node-list input[type=checkbox]:checked').length;
-    document.getElementById('sel-count').textContent = n;
-  }
-  function selectAllNodes(v){
-    document.querySelectorAll('#node-list input[type=checkbox]').forEach(cb=>cb.checked=v);
-    updateSelCount();
-  }
-  function deleteSelectedNodes(){
-    const idxs = Array.from(document.querySelectorAll('#node-list input[type=checkbox]:checked')).map(cb=>Number(cb.dataset.i));
-    if(idxs.length===0) return;
-    if(!confirm('删除选中的 '+idxs.length+' 个节点?(点下方"保存节点"才会真正生效)')) return;
-    const idxSet = new Set(idxs);
-    nodeLines = nodeLines.filter((_,i)=>!idxSet.has(i));
-    markDirty();
-    renderNodeList();
   }
   function moveNode(i, dir){
     const j = i + dir;
     if(j<0 || j>=nodeLines.length) return;
     if(nodeLines[i].disabled !== nodeLines[j].disabled) return; // 只在同一组(启用/停用)内挪动
     const tmp = nodeLines[i]; nodeLines[i] = nodeLines[j]; nodeLines[j] = tmp;
+    markDirty();
+    renderNodeList();
+  }
+  function handleDragStart(e){ dragSrc = Number(e.currentTarget.dataset.i); e.dataTransfer.effectAllowed='move'; }
+  function handleDrop(e){
+    e.preventDefault();
+    e.currentTarget.classList.remove('drag-over');
+    const dst = Number(e.currentTarget.dataset.i);
+    if(dragSrc===null || dragSrc===dst){ dragSrc=null; return; }
+    if(nodeLines[dragSrc].disabled !== nodeLines[dst].disabled){ dragSrc=null; return; } // 只在同一组内拖
+    const [item] = nodeLines.splice(dragSrc,1);
+    nodeLines.splice(dst,0,item);
+    dragSrc = null;
+    markDirty();
+    renderNodeList();
+  }
+  function handleDragEnd(e){ e.currentTarget.draggable=false; dragSrc=null; }
+  function goParse(uri){
+    if(dirty && !confirm('还有未保存的改动,离开这页会丢失。确定要去解析这个节点吗?')) return;
+    location.href = '${ADMIN_PATH}/tools?parse='+encodeURIComponent(uri)+'&back='+encodeURIComponent(location.href);
+  }
+  function updateSelCount(){
+    const n = document.querySelectorAll('#node-tbody input[type=checkbox]:checked').length;
+    document.getElementById('sel-count').textContent = n;
+  }
+  function selectAllNodes(v){
+    document.querySelectorAll('#node-tbody input[type=checkbox]').forEach(cb=>cb.checked=v);
+    updateSelCount();
+  }
+  function deleteSelectedNodes(){
+    const idxs = Array.from(document.querySelectorAll('#node-tbody input[type=checkbox]:checked')).map(cb=>Number(cb.dataset.i));
+    if(idxs.length===0) return;
+    if(!confirm('删除选中的 '+idxs.length+' 个节点?(点下方"保存节点"才会真正生效)')) return;
+    const idxSet = new Set(idxs);
+    nodeLines = nodeLines.filter((_,i)=>!idxSet.has(i));
     markDirty();
     renderNodeList();
   }

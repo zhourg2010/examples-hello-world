@@ -9,7 +9,7 @@ import { appendLog, getDevice, getNodes, recordHit } from "../kv.ts";
 import { maybeFlush } from "../db.ts";
 import { toSingboxJson } from "../singbox.ts";
 import { toClashYaml } from "../clash.ts";
-import { filterAndReencode } from "../protocol-filter.ts";
+import { filterAndReencode, stripDisabled } from "../protocol-filter.ts";
 
 type ClientFormat = "base64" | "singbox" | "clash";
 
@@ -52,7 +52,7 @@ export async function handleSubscribe(parts: string[], req: Request): Promise<Re
   const ua = req.headers.get("user-agent") ?? "?";
   appendLog(username, ip, ua).then(() => maybeFlush()).catch(() => {});
 
-  const rawNodes = await getNodes();
+  const rawNodes = stripDisabled(await getNodes());
   const tag = parts[3] ? decodeURIComponent(parts[3]).toLowerCase() : "";
   const spec = tag ? CLIENT_TAGS[tag] : undefined;
 
