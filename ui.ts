@@ -101,7 +101,21 @@ const STYLE = `<style>
   #node-table input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
   .drag-handle{cursor:grab;display:inline-flex;flex-direction:column;gap:2px;padding:4px 2px;user-select:none}
   .drag-handle span{display:block;width:14px;height:2px;background:var(--muted)}
-  .proto-badge{font-size:10px;font-weight:700;padding:2px 6px;border:1.5px solid var(--bd);white-space:nowrap;text-transform:uppercase;background:var(--fg);color:#fff}
+  .proto-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;padding:2px 7px 2px 5px;border:1.5px solid currentColor;white-space:nowrap;text-transform:uppercase}
+  .proto-badge svg{width:12px;height:12px;flex-shrink:0}
+  .proto-badge.p-vless{color:#ec3013}
+  .proto-badge.p-anytls{color:#9d5fc9}
+  .proto-badge.p-trojan{color:#2f9e5b}
+  .proto-badge.p-vmess{color:#3a6fd8}
+  .proto-badge.p-ss{color:#c98a1f}
+  .speed-cell{display:flex;flex-direction:column;gap:3px;min-width:64px}
+  .speed-bar{width:64px;height:4px;background:var(--bd2)}
+  .speed-fill{height:100%;background:var(--accent)}
+  .proto-stack{display:flex;height:18px;width:100%;max-width:400px;border:1px solid var(--bd2);overflow:hidden;margin-top:6px}
+  .proto-stack-seg{height:100%}
+  .proto-legend{display:flex;gap:14px;margin-top:6px;font-size:11px;flex-wrap:wrap}
+  .proto-legend span{display:flex;align-items:center;gap:5px}
+  .proto-legend i{width:9px;height:9px;display:inline-block;flex-shrink:0}
   .area-badge{font-size:11px}
   .speed-badge{font-size:11px;color:var(--muted)}
   .row-actions{display:flex;gap:4px;white-space:nowrap;align-items:center}
@@ -168,6 +182,12 @@ export function dashboardPage(opts: {
     const j = JSON.stringify(link);
     const fmt = d.format ?? "base64";
     const detailId = `taglinks-${d.id}`;
+    const defaultRow = `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--bd2)">
+        <span style="min-width:170px;font-weight:600;font-size:12px">默认格式(${FORMAT_LABEL[fmt]},不带标签)</span>
+        <code style="font-size:11px;flex:1;overflow:auto;color:var(--muted)">${link}</code>
+        <span class="tag" style="flex-shrink:0">${nodeStats.total} 个有效节点</span>
+        <button type="button" class="ghost" onclick='copyLink(${j},this)'>复制</button>
+      </div>`;
     const tagRows = CLIENT_TAG_LIST.map(({ tag, label }) => {
       const tagLink = `${link}/${tag}`;
       const tj = JSON.stringify(tagLink);
@@ -185,20 +205,21 @@ export function dashboardPage(opts: {
       <td><span class="status ${d.enabled ? "on" : "off"}">${d.enabled ? "启用" : "停用"}</span></td>
       <td><span class="tag">${FORMAT_LABEL[fmt]}(默认)</span></td>
       <td class="hits">${timeAgo(d.lastSeen)}<br><span style="opacity:.7">共 ${d.hits ?? 0} 次</span></td>
+      <td><button type="button" class="ghost" onclick="toggleDeviceDetail('${detailId}')">链接</button></td>
       <td><div class="actions">
         <button type="button" class="ghost" onclick='copyLink(${j},this)'>复制</button>
         <button type="button" class="ghost" onclick='showQR(${j})'>二维码</button>
         <a href="?user=${encodeURIComponent(d.username)}"><button type="button" class="ghost">详情</button></a>
-        <button type="button" class="ghost" onclick="toggleDeviceDetail('${detailId}')">标签链接</button>
         <form method="post"><input type="hidden" name="action" value="switchformat"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" title="当前默认 ${FORMAT_LABEL[fmt]},点击切换(不带标签的旧链接会跟着变)">默认格式</button></form>
         <form method="post"><input type="hidden" name="action" value="rotate"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" onclick="return confirm('换链接后旧链接立即失效,需重新发给对方。继续?')">换链接</button></form>
         <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost">${d.enabled ? "停用" : "启用"}</button></form>
         <form method="post" onsubmit="return confirm('删除 ${escapeHtml(d.username)} ?')"><input type="hidden" name="action" value="del"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="danger">删除</button></form>
       </div></td></tr>
       <tr class="device-detail-tr" id="${detailId}" style="display:none">
-        <td colspan="6" style="background:var(--bg);padding:14px 20px 16px">
+        <td colspan="7" style="background:var(--bg);padding:14px 20px 16px">
           <div style="margin-left:22px;border-left:3px solid var(--bd);padding-left:16px">
-            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:6px">按客户端类型的标签链接</div>
+            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:6px">全部链接(含默认格式和按客户端类型的标签链接)</div>
+            ${defaultRow}
             ${tagRows}
           </div>
         </td>
@@ -228,15 +249,15 @@ export function dashboardPage(opts: {
         <h2>设备管理</h2>
         <form method="post" class="addform"><input type="hidden" name="action" value="add">
           <input name="username" placeholder="用户名(如 dell3600_kingGarden)" required>
-          <input name="note" placeholder="备注(留空自动生成数字)">
+          <input name="note" placeholder="设备码(留空自动生成数字)">
           <select name="format">
             <option value="base64">base64(v2rayN/Shadowrocket/V2Box)</option>
             <option value="singbox">sing-box</option>
             <option value="clash">clash(OpenClash/mihomo)</option>
           </select>
           <button>添加设备</button></form>
-        <div class="tablewrap"><table><tr><th>用户名</th><th>备注</th><th>状态</th><th>格式</th><th>最近访问</th><th>操作</th></tr>
-          ${rows || `<tr><td colspan="6" style="color:var(--muted)">暂无设备</td></tr>`}</table></div>
+        <div class="tablewrap"><table><tr><th>用户名</th><th>设备码</th><th>状态</th><th>格式</th><th>最近访问</th><th>链接</th><th>操作</th></tr>
+          ${rows || `<tr><td colspan="7" style="color:var(--muted)">暂无设备</td></tr>`}</table></div>
       </section>
 
       <section class="pane" id="pane-nodes">
@@ -298,8 +319,25 @@ export function dashboardPage(opts: {
         <h3 style="font-size:14px;margin:18px 0 8px">本批次(Mac mini 推送)</h3>
         <div class="tablewrap"><table>
           <tr><th style="width:180px">批次标签</th><td>${nodeStats.batchLabel ? escapeHtml(nodeStats.batchLabel) : "<span style='color:var(--muted)'>暂无(还没推送过)</span>"}</td></tr>
-          <tr><th>Deno 收到时间</th><td>${nodesUpdated ? `${timeAgo(nodesUpdated)} · ${new Date(nodesUpdated).toLocaleString("zh-CN")}` : "—"}</td></tr>
-          <tr><th>节点数(不含时间戳假节点)</th><td><strong>${nodeStats.total}</strong> 个 — vless <strong>${nodeStats.vless}</strong> · anytls <strong>${nodeStats.anytls}</strong> · trojan <strong>${nodeStats.trojan}</strong></td></tr>
+          <tr><th>Deno 收到时间</th><td>${
+            nodesUpdated
+              ? `<span style="color:${Date.now() - nodesUpdated > 24 * 3600 * 1000 ? "var(--accent)" : "var(--ok)"};font-weight:600">${timeAgo(nodesUpdated)}</span> · ${new Date(nodesUpdated).toLocaleString("zh-CN")}${Date.now() - nodesUpdated > 24 * 3600 * 1000 ? ' <span class="tag" style="background:var(--accent);color:#fff;border-color:var(--accent)">超过24小时未更新</span>' : ""}`
+              : "—"
+          }</td></tr>
+          <tr><th>节点数(不含时间戳假节点)</th><td>
+            <strong>${nodeStats.total}</strong> 个 — vless <strong>${nodeStats.vless}</strong> · anytls <strong>${nodeStats.anytls}</strong> · trojan <strong>${nodeStats.trojan}</strong>
+            ${nodeStats.total > 0 ? `
+            <div class="proto-stack">${[
+              { n: nodeStats.vless, color: "#ec3013" },
+              { n: nodeStats.anytls, color: "#9d5fc9" },
+              { n: nodeStats.trojan, color: "#2f9e5b" },
+            ].filter((s) => s.n > 0).map((s) => `<div class="proto-stack-seg" style="width:${(s.n / nodeStats.total * 100).toFixed(1)}%;background:${s.color}"></div>`).join("")}</div>
+            <div class="proto-legend">
+              <span><i style="background:#ec3013"></i>vless ${nodeStats.total ? Math.round(nodeStats.vless / nodeStats.total * 100) : 0}%</span>
+              <span><i style="background:#9d5fc9"></i>anytls ${nodeStats.total ? Math.round(nodeStats.anytls / nodeStats.total * 100) : 0}%</span>
+              <span><i style="background:#2f9e5b"></i>trojan ${nodeStats.total ? Math.round(nodeStats.trojan / nodeStats.total * 100) : 0}%</span>
+            </div>` : ""}
+          </td></tr>
         </table></div>
         ${nodeStats.batchLabel && nodeStats.batchLabel.includes("⚠") ? `<div class="notice bad" style="margin-top:12px">这批节点里有协议在吃缓存兜底(标签里带 ⚠),说明 Mac mini 上一轮该协议没测出新节点。</div>` : ""}
 
@@ -311,7 +349,7 @@ export function dashboardPage(opts: {
         </table></div>
 
         <h3 style="font-size:14px;margin:24px 0 8px">设备访问一览</h3>
-        <div class="tablewrap"><table><tr><th>用户名</th><th>备注</th><th>状态</th><th>累计次数</th><th>最近访问</th></tr>
+        <div class="tablewrap"><table><tr><th>用户名</th><th>设备码</th><th>状态</th><th>累计次数</th><th>最近访问</th></tr>
           ${devices.length ? devices.map((d) => `<tr>
             <td><strong>${escapeHtml(d.username)}</strong></td>
             <td style="color:var(--muted)">${escapeHtml(d.note)}</td>
@@ -407,6 +445,26 @@ export function dashboardPage(opts: {
     });
   }
 
+  // 把"US_1"这种带国家代码的文字前面补上对应国旗emoji;已经带旗子的原样返回(不重复加)。
+  function flagOf(text){
+    if(/[\\u{1F1E6}-\\u{1F1FF}]{2}/u.test(text)) return text;
+    const m = text.match(/^([A-Z]{2})(?:[_\\-]|$)/);
+    if(!m) return text;
+    const cc = m[1];
+    const flag = String.fromCodePoint(...[...cc].map(c=>0x1F1E6 + c.charCodeAt(0) - 65));
+    return flag + ' ' + text;
+  }
+
+  // 协议图标(Claude Design 出的 mono 版,currentColor 描边,配合 CSS 里各协议的颜色)
+  const PROTO_ICONS = {
+    vless: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5l9 14 9-14"></path><path d="M8 5l4 6"></path></svg>',
+    anytls: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9"></rect><path d="M8 11V7a4 4 0 0 1 8 0"></path><path d="M12 15v2"></path></svg>',
+    trojan: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5l8-3z"></path><path d="M9 12l2 2 4-4"></path></svg>',
+    vmess: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14"></rect><path d="M3 6l9 7 9-7"></path></svg>',
+    ss: '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 8-8"></path><path d="M20 12a8 8 0 0 1-8 8"></path><circle cx="12" cy="12" r="2.5"></circle></svg>',
+  };
+  const PROTO_COLOR_HEX = { vless:'#ec3013', anytls:'#9d5fc9', trojan:'#2f9e5b', vmess:'#3a6fd8', ss:'#c98a1f' };
+
   function parseNodeDisplay(uri){
     const m = uri.match(/^([a-zA-Z0-9]+):\\/\\//);
     const proto = m ? m[1] : '?';
@@ -490,11 +548,11 @@ export function dashboardPage(opts: {
         + ' ondragleave="this.classList.remove(\\'drag-over\\')"'
         + ' ondragstart="handleDragStart(event)" ondrop="handleDrop(event)" ondragend="handleDragEnd(event)">'
         + '<td><input type="checkbox" data-i="'+i+'" onchange="updateSelCount()"></td>'
-        + '<td><span class="proto-badge">'+f.proto+'</span></td>'
+        + '<td><span class="proto-badge p-'+f.proto+'">'+(PROTO_ICONS[f.proto]||'')+f.proto+'</span></td>'
         + '<td class="mono">'+escAttr(f.server)+'</td>'
         + '<td class="mono">'+(f.port||'-')+'</td>'
-        + '<td class="area-badge">'+escAttr(f.area)+'</td>'
-        + '<td class="speed-badge">'+escAttr(f.speed)+'</td>'
+        + '<td class="area-badge">'+escAttr(flagOf(f.area))+'</td>'
+        + '<td><div class="speed-cell"><span>'+escAttr(f.speed)+'</span><div class="speed-bar"><div class="speed-fill" style="width:'+(speedSortValue(f.speed)<0?0:Math.min(100,speedSortValue(f.speed)/2000*100))+'%"></div></div></div></td>'
         + '<td>'+escAttr(f.security)+'</td>'
         + '<td><div class="row-actions">'
         +   '<button type="button" class="ghost" onclick="copyLink(this.closest(\\'tr\\').dataset.uri,this)">复制</button>'
