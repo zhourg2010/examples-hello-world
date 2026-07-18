@@ -43,8 +43,9 @@ const STYLE = `<style>
   .node-result{margin-top:14px}
   .result-header .kicker{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700;margin-bottom:4px}
   .result-header .uri-line{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);word-break:break-all;margin-top:6px}
-  .fact-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:2px;background:var(--bd);border:2px solid var(--bd);margin:14px 0 18px}
-  .fact-card{background:#fff;padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+  .fact-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:0;margin:14px 0 18px;border:2px solid var(--bd)}
+  .fact-card{background:#fff;padding:14px 16px;display:flex;flex-direction:column;gap:6px;border-left:1px solid var(--bd2)}
+  .fact-card:first-child{border-left:none}
   .fact-card .f-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}
   .fact-card .f-value{font-weight:700;font-size:20px}
   .fact-card .f-basis{font-size:11px;color:var(--muted);line-height:1.5}
@@ -52,8 +53,9 @@ const STYLE = `<style>
   .score-legend span{display:flex;align-items:center;gap:4px}
   .legend-dot{width:8px;height:8px;display:inline-block;background:var(--accent)}
   .legend-dot.theory{background:none;border:1px solid var(--bd2)}
-  .score-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:2px;background:var(--bd);border:2px solid var(--bd)}
-  .score-card{background:#fff;padding:14px 16px;display:flex;flex-direction:column;gap:8px;position:relative}
+  .score-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));border:2px solid var(--bd)}
+  .score-card{background:#fff;padding:14px 16px;display:flex;flex-direction:column;gap:8px;position:relative;border-left:1px solid var(--bd2);border-top:1px solid var(--bd2)}
+  .score-card:first-child{border-top:none;border-left:none}
   .score-card.theoretical{background:repeating-linear-gradient(135deg,#fff,#fff 8px,var(--bg) 8px,var(--bg) 9px)}
   .score-card .tag-corner{position:absolute;top:10px;right:10px;font-size:9px;text-transform:uppercase;letter-spacing:.05em;font-weight:700;padding:2px 6px}
   .score-card .tag-corner.theory{border:1px solid var(--bd2);color:var(--muted)}
