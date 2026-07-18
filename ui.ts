@@ -88,11 +88,17 @@ const STYLE = `<style>
   .pane{display:none}
   .pane.active{display:block}
   .pane h2:first-child{margin-top:0}
-  #node-list{border:2px solid var(--bd);max-height:440px;overflow-y:auto;background:#fff}
-  .node-row{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--bd2);font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  #node-list{border:2px solid var(--bd);max-height:520px;overflow-y:auto;background:#fff}
+  .node-row{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid var(--bd2);font-size:12px}
   .node-row:last-child{border-bottom:none}
+  .node-row.off{opacity:.45;background:var(--bg)}
   .node-row input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px;flex-shrink:0}
-  .node-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .node-row .mv{display:flex;flex-direction:column;gap:1px;flex-shrink:0}
+  .node-row .mv button{padding:0 5px;font-size:9px;height:15px;line-height:13px;border-width:1px}
+  .node-row .proto-badge{font-size:10px;font-weight:700;padding:2px 6px;border:1.5px solid var(--bd);flex-shrink:0;text-transform:uppercase;background:var(--fg);color:#fff}
+  .node-row .name{flex:1;overflow:hidden;white-space:nowrap;display:flex;gap:4px;align-items:center}
+  .node-row .name b{background:var(--bg);border:1px solid var(--bd2);padding:0 5px;font-weight:600;white-space:nowrap;font-size:11px;flex-shrink:0}
+  .node-row .toggle-off{flex-shrink:0;font-size:10px;padding:4px 8px;height:auto}
   @media(max-width:720px){
     .topbar{flex-direction:column;align-items:flex-start}
     .brand{padding-bottom:8px}
@@ -218,6 +224,11 @@ export function dashboardPage(opts: {
           共 <strong id="node-count">0</strong> 个节点 · ${escapeHtml(updatedText)}
           <span id="dirty-badge" class="tag tag-accent" style="display:none;margin-left:8px">未保存</span>
         </p>
+        <p class="sub" style="margin-bottom:14px">
+          名字里的信息是 Mac mini 测速时写进去的(测速/风险等,视 subs-check 配置而定)。
+          用 ↑↓ 手动排序——想让哪个排最前就把它挪到最上面,不一定是测速最快的那个。
+          "停用"的节点会自动沉到列表最后,并且<strong>不会再推给任何客户端</strong>(不是只在这里看不见,是真的从订阅内容里拿掉),随时可以再启用。
+        </p>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
           <button type="button" class="ghost" onclick="selectAllNodes(true)">全选</button>
@@ -228,7 +239,7 @@ export function dashboardPage(opts: {
         <div id="node-list"></div>
 
         <h2 style="font-size:15px;margin-top:24px">追加节点</h2>
-        <p class="sub" style="margin-bottom:8px">粘贴一条或多条节点链接,一行一个。会自动跳过与已有列表重复的。</p>
+        <p class="sub" style="margin-bottom:8px">粘贴一条或多条节点链接,一行一个。会自动跳过与已有列表重复的,追加的节点默认排在启用组最后面。</p>
         <textarea id="add-input" rows="4" style="width:100%" placeholder="vless://...&#10;anytls://...&#10;trojan://...&#10;vmess://...&#10;ss://..."></textarea>
         <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
           <button type="button" class="ghost" onclick="appendNodes()">追加到列表</button>
@@ -327,19 +338,69 @@ export function dashboardPage(opts: {
     document.getElementById('qrmask').classList.add('show');
   }
 
-  // ===== 节点 checkbox 列表管理 =====
+  // ===== 节点列表管理 =====
+  // 重要:KV 里存的 nodes 是 Mac mini 推送时的原样格式——整段 base64(标准订阅格式),
+  // 不是按行的明文列表。要拆成一条条节点显示,得先 base64 解码;保存回去时再编码回 base64,
+  // 不然 base64 订阅格式的客户端(v2rayN/V2Box 等)直接读这个值时会解析失败。
+  //
+  // 每个节点在内存里是 {uri, disabled} 对象。停用的节点存回去时会加上 OFF_PREFIX 前缀,
+  // 服务端(protocol-filter.ts 的 stripDisabled)会在返回给任何客户端之前把这些行整个剔除——
+  // 不是只在这个页面看不见,是真的不会出现在任何格式/标签的订阅内容里。
+  const b64enc = new TextEncoder(), b64dec = new TextDecoder();
+  const OFF_PREFIX = '#OFF# ';
+  function toB64(bytes){let s='';for(const b of bytes)s+=String.fromCharCode(b);return btoa(s);}
+  function fromB64(b64){ try{ const s=atob(b64.trim()); const a=new Uint8Array(s.length); for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i); return a; }catch(e){ return null; } }
+
+  function decodeNodesBlob(raw){
+    const trimmed = (raw||'').trim();
+    if(!trimmed) return [];
+    let text = trimmed;
+    // 已经是明文列表(以协议前缀或停用标记开头)就不用解码,直接按行拆
+    if(!/^(vmess|vless|trojan|anytls|ss|ssr):\\/\\//i.test(trimmed) && !trimmed.startsWith(OFF_PREFIX)){
+      const bytes = fromB64(trimmed);
+      if(bytes) text = b64dec.decode(bytes);
+    }
+    return text.split(/\\r?\\n/).map(s=>s.trim()).filter(Boolean).map(line=>{
+      if(line.startsWith(OFF_PREFIX)) return { uri: line.slice(OFF_PREFIX.length), disabled: true };
+      return { uri: line, disabled: false };
+    });
+  }
+
+  function parseNodeDisplay(uri){
+    const m = uri.match(/^([a-zA-Z0-9]+):\\/\\//);
+    const proto = m ? m[1] : '?';
+    const h = uri.indexOf('#');
+    let name = h>=0 ? uri.slice(h+1) : '(无名字)';
+    try{ name = decodeURIComponent(name); }catch(e){}
+    return { proto, name };
+  }
+
   const INITIAL_NODES = ${JSON.stringify(nodes)};
-  let nodeLines = INITIAL_NODES.split(/\\r?\\n/).map(s=>s.trim()).filter(Boolean);
+  let nodeLines = decodeNodesBlob(INITIAL_NODES);
   let dirty = false;
 
   function markDirty(){ dirty = true; document.getElementById('dirty-badge').style.display='inline-block'; }
 
+  // 保证不变量:启用的节点都排在停用的节点前面(组内相对顺序不变——JS sort 是稳定排序)
+  function settleGroups(){ nodeLines.sort((a,b)=>(a.disabled?1:0)-(b.disabled?1:0)); }
+
   function renderNodeList(){
+    settleGroups();
     const box = document.getElementById('node-list');
-    box.innerHTML = nodeLines.map((line,i)=>
-      '<div class="node-row"><input type="checkbox" data-i="'+i+'" onchange="updateSelCount()">'+
-      '<span title="'+line.replace(/"/g,'&quot;')+'">'+line.replace(/</g,'&lt;')+'</span></div>'
-    ).join('');
+    box.innerHTML = nodeLines.map((item,i)=>{
+      const { proto, name } = parseNodeDisplay(item.uri);
+      const badges = name.split('|').map(s=>s.trim()).filter(Boolean).map(s=>'<b>'+s.replace(/</g,'&lt;')+'</b>').join('');
+      const upDisabled = i===0 || nodeLines[i-1].disabled !== item.disabled;
+      const downDisabled = i===nodeLines.length-1 || nodeLines[i+1].disabled !== item.disabled;
+      return '<div class="node-row'+(item.disabled?' off':'')+'" title="'+item.uri.replace(/"/g,'&quot;')+'">'
+        + '<input type="checkbox" data-i="'+i+'" onchange="updateSelCount()">'
+        + '<span class="mv"><button type="button" '+(upDisabled?'disabled':'')+' onclick="moveNode('+i+',-1)">▲</button>'
+        + '<button type="button" '+(downDisabled?'disabled':'')+' onclick="moveNode('+i+',1)">▼</button></span>'
+        + '<span class="proto-badge">'+proto+'</span>'
+        + '<span class="name">'+(badges||'<b>'+name.replace(/</g,'&lt;')+'</b>')+'</span>'
+        + '<button type="button" class="ghost toggle-off" onclick="toggleDisableNode('+i+')">'+(item.disabled?'启用':'停用')+'</button>'
+        + '</div>';
+    }).join('');
     document.getElementById('node-count').textContent = nodeLines.length;
     updateSelCount();
   }
@@ -360,25 +421,40 @@ export function dashboardPage(opts: {
     markDirty();
     renderNodeList();
   }
+  function moveNode(i, dir){
+    const j = i + dir;
+    if(j<0 || j>=nodeLines.length) return;
+    if(nodeLines[i].disabled !== nodeLines[j].disabled) return; // 只在同一组(启用/停用)内挪动
+    const tmp = nodeLines[i]; nodeLines[i] = nodeLines[j]; nodeLines[j] = tmp;
+    markDirty();
+    renderNodeList();
+  }
+  function toggleDisableNode(i){
+    nodeLines[i].disabled = !nodeLines[i].disabled;
+    markDirty();
+    renderNodeList(); // 内部会调用 settleGroups(),停用的自动沉到最后
+  }
   function appendNodes(){
     const raw = document.getElementById('add-input').value;
     const lines = raw.split(/\\r?\\n/).map(s=>s.trim()).filter(Boolean);
-    const existing = new Set(nodeLines);
+    const existing = new Set(nodeLines.map(n=>n.uri));
     let added = 0, skipped = 0;
     for(const l of lines){
       if(existing.has(l)){ skipped++; continue; }
-      nodeLines.push(l); existing.add(l); added++;
+      nodeLines.push({ uri: l, disabled: false }); existing.add(l); added++;
     }
     document.getElementById('add-input').value='';
     document.getElementById('add-msg').textContent = added+' 条已追加'+(skipped?(','+skipped+' 条重复已跳过'):'');
     if(added>0){ markDirty(); renderNodeList(); }
   }
   function prepareSaveNodes(form){
-    const joined = nodeLines.join('\\n');
-    if(joined.trim()===''){
-      if(!confirm('节点内容是空的!保存后所有设备将无法获取节点。确定要保存空内容?')) return false;
+    settleGroups();
+    const joined = nodeLines.map(n=> n.disabled ? (OFF_PREFIX+n.uri) : n.uri).join('\\n');
+    if(nodeLines.every(n=>n.disabled) || nodeLines.length===0){
+      if(!confirm('保存后所有设备将拿不到任何可用节点(节点是空的,或全部被停用了)。确定要保存?')) return false;
     }
-    document.getElementById('save-nodes-input').value = joined;
+    // 存回 KV 时编码回 base64,跟 Mac mini 推送时的格式保持一致(base64 订阅链接直接依赖这个格式)
+    document.getElementById('save-nodes-input').value = joined ? toB64(b64enc.encode(joined + '\\n')) : '';
     return true;
   }
   renderNodeList();

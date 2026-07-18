@@ -5,6 +5,28 @@
 
 import { b64decode } from "./singbox.ts";
 
+// 后台"节点内容"编辑器里禁用某个节点时,给这一行加这个前缀存回去(而不是真的删掉/单独另存)。
+// 好处:管理页能继续看到并重新启用它;其它所有解析器(singbox.ts/clash.ts/这个文件自己的过滤)
+// 认不出这个前缀,天然会跳过——只有"面向客户端的原始 base64 格式"需要显式再过滤一层,见 stripDisabled()。
+export const OFF_PREFIX = "#OFF# ";
+
+// 面向客户端的订阅内容(不管哪种格式)在返回前都要先过一遍这个,把禁用节点物理剔除掉,
+// 不能只是在管理页面"看起来"禁用。
+export function stripDisabled(raw: string): string {
+  let text = raw.trim();
+  if (!text) return raw;
+  const looksEncoded = !/(vmess|vless|trojan|anytls|ss|ssr):\/\//i.test(text) && !text.startsWith(OFF_PREFIX);
+  if (looksEncoded) {
+    const dec = b64decode(text);
+    if (dec) text = dec;
+  }
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const kept = lines.filter((l) => !l.startsWith(OFF_PREFIX));
+  if (kept.length === lines.length) return raw; // 没有禁用节点,原样返回,省一次编解码
+  const joined = kept.join("\n") + (kept.length ? "\n" : "");
+  return btoa(joined);
+}
+
 export function filterAndReencode(raw: string, allowedPrefixes: string[]): string {
   let text = raw.trim();
   if (!allowedPrefixes.some((p) => text.startsWith(p)) && !/(vmess|vless|trojan|anytls|ss|ssr):\/\//i.test(text)) {
