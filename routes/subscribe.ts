@@ -9,7 +9,13 @@ import { appendLog, getDevice, getNodes, recordHit } from "../kv.ts";
 import { maybeFlush } from "../db.ts";
 import { toSingboxJson } from "../singbox.ts";
 import { toClashYaml } from "../clash.ts";
-import { filterAndReencode, stripDisabled } from "../protocol-filter.ts";
+import { filterAndReencode, capNodeCount } from "../protocol-filter.ts";
+
+// 默认(不带标签)链接的节点数量上限 / 每个客户端标签链接各自的节点数量上限。
+// 默认链接理论上已经在 Mac mini 那边的 GENERAL_CAP 控制在 50 以内了,这里再截一次
+// 是防御性的——就算上游哪天推送了超量的池子,Deno 这边也不会把超量的都吐给客户端。
+const DEFAULT_CAP = 50;
+const TAG_CAP = 30;
 
 type ClientFormat = "base64" | "singbox" | "clash";
 
@@ -52,7 +58,7 @@ export async function handleSubscribe(parts: string[], req: Request): Promise<Re
   const ua = req.headers.get("user-agent") ?? "?";
   appendLog(username, ip, ua).then(() => maybeFlush()).catch(() => {});
 
-  const rawNodes = stripDisabled(await getNodes());
+  const rawNodes = await getNodes();
   const tag = parts[3] ? decodeURIComponent(parts[3]).toLowerCase() : "";
   const spec = tag ? CLIENT_TAGS[tag] : undefined;
 
@@ -61,10 +67,12 @@ export async function handleSubscribe(parts: string[], req: Request): Promise<Re
   }
 
   if (spec) {
-    const nodes = spec.allowedPrefixes ? filterAndReencode(rawNodes, spec.allowedPrefixes) : rawNodes;
+    const filtered = spec.allowedPrefixes ? filterAndReencode(rawNodes, spec.allowedPrefixes) : rawNodes;
+    const nodes = capNodeCount(filtered, TAG_CAP);
     return renderByFormat(spec.format, nodes);
   }
 
-  // 无标签:旧行为,走设备后台设置的默认格式,全量协议池
-  return renderByFormat((dev.format ?? "base64") as ClientFormat, rawNodes);
+  // 无标签:旧行为,走设备后台设置的默认格式,全量协议池(截到 DEFAULT_CAP)
+  const nodes = capNodeCount(rawNodes, DEFAULT_CAP);
+  return renderByFormat((dev.format ?? "base64") as ClientFormat, nodes);
 }
