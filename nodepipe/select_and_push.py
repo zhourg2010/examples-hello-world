@@ -2,12 +2,14 @@
 # -*- coding: utf-8 -*-
 # Reads subs-check output (clash yaml), rebuilds vless:// / anytls:// / trojan:// URIs,
 # picks up to PICK_VLESS vless nodes + PICK_OTHER anytls/trojan nodes (each bucket
-# sorted by region priority US > Europe > Asia > other, no cross-bucket backfill),
+# sorted by CL- (Claude unlock) first, then region priority US > Europe > Asia > other,
+# no cross-bucket backfill from fresh results), trims the combined total to GENERAL_CAP,
 # and POSTs the newline-joined list to the Deno /push endpoint.
 # Aborts (keeps last good push) if fewer than MIN_KEEP nodes survive filtering.
 #
 # All secrets come from environment variables (set by select_and_push.sh):
-#   PUSH_URL, PUSH_KEY, SUBS_OUTPUT (optional), PICK_VLESS (optional), PICK_OTHER (optional), MIN_KEEP (optional)
+#   PUSH_URL, PUSH_KEY, SUBS_OUTPUT (optional), PICK_VLESS (optional), PICK_OTHER (optional),
+#   GENERAL_CAP (optional), MIN_KEEP (optional)
 
 import os
 import sys
@@ -16,16 +18,22 @@ import urllib.parse
 import urllib.request
 import urllib.error
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import node_cache
-
 PUSH_URL = os.environ.get("PUSH_URL", "").strip()
 PUSH_KEY = os.environ.get("PUSH_KEY", "").strip()
 OUTPUT = os.environ.get("SUBS_OUTPUT", os.path.expanduser("~/nodepipe/bin/output/all.yaml"))
-PICK_VLESS = int(os.environ.get("PICK_VLESS", "10"))
-PICK_OTHER = int(os.environ.get("PICK_OTHER", "10"))
-MIN_KEEP = int(os.environ.get("MIN_KEEP", "5"))
+PICK_VLESS = int(os.environ.get("PICK_VLESS", "30"))
+PICK_OTHER = int(os.environ.get("PICK_OTHER", "30"))
+GENERAL_CAP = int(os.environ.get("GENERAL_CAP", "50"))
+MIN_KEEP = int(os.environ.get("MIN_KEEP", "10"))
 LOGFILE = os.path.expanduser("~/nodepipe/logs/push.log")
+
+# 历史节点"三振出局"参数：连续几次没在测活结果里出现，就从"每次强制重测"名单里除名，
+# 转入被动归档池（只有真正凑不够数的时候才作为垫底候选）。
+HISTORY_MISS_LIMIT = 3
+HISTORY_FILE = os.path.expanduser("~/nodepipe/state/node_history.json")
+# 写到 subs-check 的 output-dir 下,靠它自带的 8199 文件服务对外提供,
+# 再把这个 URL 加进 sub-urls,下一轮 subs-check 就会真的把这些节点纳入重测。
+RECENT_RETEST_FILE = os.path.expanduser("~/nodepipe/bin/output/recent_history.txt")
 
 # Region priority by country code found in node name (subs-check rename format: e.g. US_24, GB_4, JP_5)
 US = {"US"}
@@ -47,10 +55,8 @@ def log(msg):
 
 
 def country_of(name: str) -> str:
-    # name looks like "🇺🇸US_24|529KB/s|43%|CL-US" -> extract the CC after flag, before _ or |
     s = "".join(ch for ch in name if ch.isascii())  # drop flag emoji
     s = s.lstrip("|").strip()
-    # take leading letters
     cc = ""
     for ch in s:
         if ch.isalpha():
@@ -71,12 +77,21 @@ def region_rank(name: str) -> int:
     return 4
 
 
+def has_cl(name: str) -> bool:
+    # subs-check 的 media-check 给解锁 Claude 的节点名里加 "CL-" 标签。
+    # 不再拿它当硬过滤(那样一次 media-check 抖动就可能清零所有节点),
+    # 只用来在同一个桶内把"已验证能用 Claude"的节点排到前面。
+    return "CL-" in name
+
+
+def sort_key(p: dict):
+    name = str(p.get("name", ""))
+    return (0 if has_cl(name) else 1, region_rank(name))
+
+
 def is_excluded(name: str) -> bool:
-    # Layer 1: clean country-code prefix (subs-check's normal rename output).
     if country_of(name) in EXCLUDE:
         return True
-    # Layer 2: keyword fallback, in case a node's name never got a clean
-    # country-code prefix but still carries an HK/MO label some other way.
     upper = name.upper()
     return any(kw in name or kw in upper for kw in EXCLUDE_KEYWORDS)
 
@@ -85,23 +100,31 @@ STATE_DIR = os.path.expanduser("~/nodepipe/state")
 CACHE_FILE = os.path.join(STATE_DIR, "last_good.json")
 
 
-def load_cache() -> dict:
+def load_json(path: str) -> dict:
     try:
         import json
-        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return {}
 
 
-def save_cache(data: dict):
+def save_json(path: str, data: dict):
     try:
         import json
-        os.makedirs(STATE_DIR, exist_ok=True)
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        log(f"WARN: failed to save bucket cache: {e}")
+        log(f"WARN: failed to save {path}: {e}")
+
+
+def load_cache() -> dict:
+    return load_json(CACHE_FILE)
+
+
+def save_cache(data: dict):
+    save_json(CACHE_FILE, data)
 
 
 def load_yaml(path: str):
@@ -118,7 +141,6 @@ def load_yaml(path: str):
 
 
 def build_vless(p: dict) -> str:
-    # Rebuild a vless:// URI from a clash mihomo proxy dict.
     if p.get("type") != "vless":
         return ""
     uuid = p.get("uuid", "")
@@ -129,11 +151,9 @@ def build_vless(p: dict) -> str:
         return ""
 
     q = {"encryption": "none"}
-
     net = p.get("network", "tcp")
     q["type"] = net
 
-    # security: reality / tls / none
     reality = p.get("reality-opts") or {}
     if reality:
         q["security"] = "reality"
@@ -155,7 +175,6 @@ def build_vless(p: dict) -> str:
     if p.get("flow"):
         q["flow"] = p["flow"]
 
-    # transport-specific
     if net == "ws":
         ws = p.get("ws-opts") or {}
         if ws.get("path"):
@@ -175,8 +194,6 @@ def build_vless(p: dict) -> str:
 
 
 def build_anytls(p: dict) -> str:
-    # anytls:// URI per https://github.com/anytls/anytls-go/blob/main/docs/uri_scheme.md
-    #   anytls://[password@]host[:port]/?[sni=...]&[insecure=0|1]#name
     if p.get("type") != "anytls":
         return ""
     password = p.get("password", "")
@@ -199,7 +216,6 @@ def build_anytls(p: dict) -> str:
 
 
 def build_trojan(p: dict) -> str:
-    # Rebuild a trojan:// URI from a clash mihomo proxy dict.
     if p.get("type") != "trojan":
         return ""
     password = p.get("password", "")
@@ -241,6 +257,90 @@ def build_trojan(p: dict) -> str:
 BUILDERS = {"vless": build_vless, "anytls": build_anytls, "trojan": build_trojan}
 
 
+def identity_of(p: dict) -> str:
+    return f"{p.get('type')}:{p.get('server')}:{p.get('port')}"
+
+
+def bucket_of(p: dict) -> str:
+    return "vless" if p.get("type") == "vless" else "other"
+
+
+def update_node_history(candidates: list) -> dict:
+    """
+    三振出局逻辑：
+    - 本轮出现的节点 -> streak_miss 归零，记下最新 URI/名字。
+    - 历史记录里本轮没出现的 -> streak_miss += 1。
+    - streak_miss 在 1~(HISTORY_MISS_LIMIT-1) 之间 -> 视为"最近三次内还活过"，
+      写入 recent_history.txt 让 subs-check 下一轮把它带回去真正重测。
+    - streak_miss >= HISTORY_MISS_LIMIT -> 移出重测名单（不再每轮强制测），
+      但记录本身保留在 history 里，作为最后兜底的候选来源。
+    """
+    history = load_json(HISTORY_FILE)
+    now = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M")
+    fresh_ids = set()
+
+    for p in candidates:
+        ident = identity_of(p)
+        fresh_ids.add(ident)
+        builder = BUILDERS.get(p.get("type"))
+        uri = builder(p) if builder else ""
+        if not uri:
+            continue
+        entry = history.get(ident, {})
+        entry.update({
+            "bucket": bucket_of(p),
+            "last_uri": uri,
+            "last_name": str(p.get("name", "")),
+            "last_seen": now,
+            "streak_miss": 0,
+            "appearances": entry.get("appearances", 0) + 1,
+        })
+        history[ident] = entry
+
+    for ident, entry in history.items():
+        if ident in fresh_ids:
+            continue
+        entry["streak_miss"] = entry.get("streak_miss", 0) + 1
+
+    save_json(HISTORY_FILE, history)
+
+    retest_lines = []
+    for ident, entry in history.items():
+        if ident in fresh_ids:
+            continue
+        miss = entry.get("streak_miss", 0)
+        if 0 < miss < HISTORY_MISS_LIMIT and entry.get("last_uri"):
+            retest_lines.append(entry["last_uri"])
+
+    try:
+        os.makedirs(os.path.dirname(RECENT_RETEST_FILE), exist_ok=True)
+        with open(RECENT_RETEST_FILE, "w", encoding="utf-8") as f:
+            if retest_lines:
+                f.write("\n".join(retest_lines) + "\n")
+        log(f"--- node history: {len(retest_lines)} recently-alive node(s) queued for retest "
+            f"via recent_history.txt ---")
+    except Exception as e:
+        log(f"WARN: failed to write {RECENT_RETEST_FILE}: {e}")
+
+    return history
+
+
+def archived_uris_for_bucket(history: dict, bucket: str, exclude_ids: set, limit: int) -> list:
+    """从三振出局归档池里取最后已知可用的 URI 当垫底候选(未在本轮重新验证过)。
+    只有前面'新鲜结果 + last_good 桶缓存'两层都还凑不够数时才会用到。"""
+    if limit <= 0:
+        return []
+    items = [
+        (ident, e) for ident, e in history.items()
+        if e.get("bucket") == bucket
+        and e.get("streak_miss", 0) >= HISTORY_MISS_LIMIT
+        and ident not in exclude_ids
+        and e.get("last_uri")
+    ]
+    items.sort(key=lambda kv: region_rank(kv[1].get("last_name", "")))
+    return [e["last_uri"] for _, e in items[:limit]]
+
+
 def main():
     if not PUSH_URL or not PUSH_KEY:
         log("ERROR: PUSH_URL / PUSH_KEY not set. Abort.")
@@ -257,35 +357,14 @@ def main():
         log("No vless/anytls/trojan nodes in output. Nothing to push.")
         sys.exit(0)
 
-    # 记一笔"这些节点这次也出现了"——给"连接稳定性/寿命"这个维度用。
-    # 记的是全体候选(不只是最后选中的),这样即使某个节点这次没被选中,
-    # 它的出现历史也不会断。stats 失败不影响主流程(比如db文件被锁一次)。
-    try:
-        stability_stats = node_cache.record_and_stats(candidates)
-    except Exception as e:
-        log(f"WARN: node_cache failed, skipping stability badges: {e}")
-        stability_stats = {}
+    history = update_node_history(candidates)
 
-    # 两个独立配额桶:vless 一桶,anytls+trojan 合并一桶("其他")。
-    # 各自按地区优先级排序、各自截取,互相不补齐——某一桶不够就是不够。
     vless_pool = [p for p in candidates if p.get("type") == "vless"]
     other_pool = [p for p in candidates if p.get("type") in ("anytls", "trojan")]
-    vless_pool.sort(key=lambda p: region_rank(str(p.get("name", ""))))
-    other_pool.sort(key=lambda p: region_rank(str(p.get("name", ""))))
+    vless_pool.sort(key=sort_key)
+    other_pool.sort(key=sort_key)
     vless_picked = vless_pool[:PICK_VLESS]
     other_picked = other_pool[:PICK_OTHER]
-
-    def attach_stability_badge(picked_list):
-        for p in picked_list:
-            ident = node_cache.identity_of(str(p.get("type", "")), str(p.get("server", "")), p.get("port", ""))
-            s = stability_stats.get(ident)
-            if not s:
-                continue
-            badge = f"⏱{s['first_seen_days_ago']}天{s['appearances']}次"
-            p["name"] = f"{p.get('name', '')}|{badge}"
-
-    attach_stability_badge(vless_picked)
-    attach_stability_badge(other_picked)
 
     def build_list(picked_list):
         out = []
@@ -294,18 +373,16 @@ def main():
             uri = builder(p)
             if uri:
                 out.append(uri)
-                log(f"  [{region_rank(str(p.get('name','')))}] [{p.get('type')}] {p.get('name','')}")
+                log(f"  [{'CL' if has_cl(str(p.get('name',''))) else '--'}]"
+                    f"[{region_rank(str(p.get('name','')))}] [{p.get('type')}] {p.get('name','')}")
         return out
 
-    log(f"--- picking {len(vless_picked)+len(other_picked)} of {len(candidates)} available "
+    log(f"--- picking up to {PICK_VLESS}+{PICK_OTHER} (general cap {GENERAL_CAP}) of {len(candidates)} available "
         f"(vless bucket {min(len(vless_pool),PICK_VLESS)}/{len(vless_pool)}, "
         f"other bucket {min(len(other_pool),PICK_OTHER)}/{len(other_pool)}) ---")
     vless_uris_fresh = build_list(vless_picked)
     other_uris_fresh = build_list(other_picked)
 
-    # 某个桶这次是空的(比如上游今天没有vless节点了)就用上次成功时缓存的那个桶顶上,
-    # 而不是让依赖那个协议的标签链接(比如 v2box/v2rayn 只要 vless+trojan)直接变空。
-    # 缓存是"按桶"存的,不是按整体——other桶有货不代表vless桶也有货。
     cache = load_cache()
     used_vless_fallback = False
     used_other_fallback = False
@@ -324,7 +401,37 @@ def main():
             log(f"WARN: other(anytls/trojan) bucket empty this run, falling back to {len(other_uris)} "
                 f"cached node(s) from {cache.get('other_ts', '?')}")
 
+    used_archive_vless = 0
+    used_archive_other = 0
+    if len(vless_uris) < PICK_VLESS:
+        picked_ids = {identity_of(p) for p in vless_picked}
+        fill = archived_uris_for_bucket(history, "vless", picked_ids, PICK_VLESS - len(vless_uris))
+        if fill:
+            used_archive_vless = len(fill)
+            vless_uris = vless_uris + fill
+            log(f"WARN: vless bucket still short, topping up with {len(fill)} archived (unretested) node(s)")
+    if len(other_uris) < PICK_OTHER:
+        picked_ids = {identity_of(p) for p in other_picked}
+        fill = archived_uris_for_bucket(history, "other", picked_ids, PICK_OTHER - len(other_uris))
+        if fill:
+            used_archive_other = len(fill)
+            other_uris = other_uris + fill
+            log(f"WARN: other bucket still short, topping up with {len(fill)} archived (unretested) node(s)")
+
     uris = vless_uris + other_uris
+
+    if len(uris) > GENERAL_CAP:
+        def uri_region(u: str) -> int:
+            try:
+                frag = urllib.parse.unquote(u.rsplit("#", 1)[-1])
+            except Exception:
+                frag = ""
+            return region_rank(frag)
+        uris.sort(key=uri_region)
+        dropped = len(uris) - GENERAL_CAP
+        uris = uris[:GENERAL_CAP]
+        log(f"--- combined total {len(vless_uris)+len(other_uris)} exceeds GENERAL_CAP={GENERAL_CAP}, "
+            f"dropped {dropped} lowest-region-priority node(s) ---")
 
     from collections import Counter
     region_tally = Counter(region_rank(str(p.get("name", ""))) for p in candidates)
@@ -335,21 +442,15 @@ def main():
         f"trojan={proto_tally.get('trojan',0)} (total {len(candidates)}) ---")
     log(f"--- picked breakdown: vless={proto_picked_tally.get('vless',0)} "
         f"anytls={proto_picked_tally.get('anytls',0)} trojan={proto_picked_tally.get('trojan',0)} "
-        f"| US={us_n} EU={eu_n} ASIA={as_n} other={ot_n} ---")
+        f"| US={us_n} EU={eu_n} ASIA={as_n} other={ot_n} "
+        f"| archive-filled: vless+{used_archive_vless} other+{used_archive_other} ---")
 
-    # Safety guard: if too few nodes survive filtering, don't push a starved
-    # list — keep whatever the Deno side already has (better than breaking
-    # everyone's connection with e.g. 2 nodes). Checked BEFORE the timestamp
-    # marker below, so the marker itself never counts toward MIN_KEEP.
     if len(uris) < MIN_KEEP:
         log(f"ERROR: only {len(uris)} nodes built (< MIN_KEEP={MIN_KEEP}). "
             f"Skipping push, keeping last good set on Deno.")
         sys.exit(1)
 
-    # 追加一个"时间戳假节点"到列表最后:不是真实可用节点(指向 127.0.0.1,连不通),
-    # 纯粹是给家人在客户端节点列表里一眼看出"这批节点是什么时候推的"——
-    # 免得以为是"每天自动更新"实际上已经很久没变。名字就是这次运行的时间。
-    real_uri_count = len(uris)  # 记下真实节点数,供下面 CSV 记录用(假节点不算数)
+    real_uri_count = len(uris)
     import datetime
     fallback_note = ""
     if used_vless_fallback and used_other_fallback:
@@ -358,14 +459,14 @@ def main():
         fallback_note = " ⚠vless为缓存"
     elif used_other_fallback:
         fallback_note = " ⚠其他为缓存"
+    if used_archive_vless or used_archive_other:
+        fallback_note += " ⚠含归档节点"
     stamp = datetime.datetime.now().strftime("更新于 %Y-%m-%d %H:%M") + fallback_note
     marker_frag = urllib.parse.quote(stamp)
     marker_uri = f"vless://00000000-0000-0000-0000-000000000000@127.0.0.1:1?encryption=none&security=none&type=tcp#{marker_frag}"
     uris.append(marker_uri)
     log(f"  [marker] appended timestamp node: {stamp}")
 
-    # base64-encode the list (standard subscription format for v2rayN/Shadowrocket;
-    # sing-box/clash conversion on the Deno side base64-decodes first, so this works for all)
     raw = ("\n".join(uris) + "\n").encode("utf-8")
     body = base64.b64encode(raw)
     req = urllib.request.Request(
@@ -376,8 +477,6 @@ def main():
         with urllib.request.urlopen(req, timeout=30) as resp:
             log(f"PUSH OK HTTP {resp.status}: {resp.read().decode('utf-8','ignore')[:200]}")
 
-            # 只有这次真的测出新鲜节点的桶才覆盖缓存;用了兜底的桶保持原样不变,
-            # 留着继续给下一次兜底用,直到哪天上游真的又有货了才会刷新。
             now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
             if vless_uris_fresh:
                 cache["vless"] = vless_uris_fresh
@@ -391,11 +490,12 @@ def main():
             new_file = not os.path.exists(csv_path)
             with open(csv_path, "a", encoding="utf-8") as cf:
                 if new_file:
-                    cf.write("time,available,picked,us,eu,asia,other,vless,anytls,trojan\n")
+                    cf.write("time,available,picked,us,eu,asia,other,vless,anytls,trojan,archive_filled\n")
                 cf.write(
                     f"{now_str},"
                     f"{len(candidates)},{real_uri_count},{us_n},{eu_n},{as_n},{ot_n},"
-                    f"{proto_tally.get('vless',0)},{proto_tally.get('anytls',0)},{proto_tally.get('trojan',0)}\n"
+                    f"{proto_tally.get('vless',0)},{proto_tally.get('anytls',0)},{proto_tally.get('trojan',0)},"
+                    f"{used_archive_vless+used_archive_other}\n"
                 )
     except urllib.error.HTTPError as e:
         log(f"PUSH FAIL HTTP {e.code}: {e.read().decode('utf-8','ignore')[:200]}")
