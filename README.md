@@ -1,120 +1,130 @@
-# proxy-sub · 开发维护说明
+# nodepipe — 家庭代理订阅自动化管道
 
-家庭代理订阅分发系统。日常使用看《订阅系统使用手册》;这份是给改代码的人看的。
+Mac mini 定时测活/测速代理节点 → 挑选打包 → 推送到 Deno Deploy → 家人/朋友设备拉取订阅。
 
-## 文件结构
+## 一、整体架构
 
 ```
-main.ts            入口。只做请求分派。基本不用改。
-config.ts          所有环境变量 + 常量路径。改配置在这。
-auth.ts            登录码派生、验证、cookie、id 生成。
-kv.ts              所有数据库读写收口。改存储结构只动这。
-mail.ts            发邮件(测试邮件 + 季度登录码邮件)。
-ui.ts              所有页面 HTML 和 CSS。改外观只动这。
-singbox.ts         base64 节点 → sing-box JSON(vmess/vless/trojan/anytls/ss 解析层,给 clash.ts 复用)
-clash.ts           复用 singbox.ts 的解析层 → Clash/mihomo YAML
-protocol-filter.ts 按协议前缀过滤节点(给不支持 anytls 的客户端标签用,如 v2box/v2rayn)
-node-stats.ts      从推送的原始节点列表里解析这批次的协议统计+批次标签(给"状态"面板用)
-routes/
-  subscribe.ts     /l/{user}/{id}[/{clientTag}] 发节点 + 记录访问
-                   不带 clientTag:走设备默认 format(旧链接兼容)
-                   带 clientTag(singbox/clash/openclash/v2box/v2rayn):格式+协议子集由标签决定
-  admin.ts         后台:登录、设备增删改、节点、备份、邮件
-  fallback.ts      应急查码入口
-  tools.ts         工具箱路由(需登录)
-  push.ts          接收本地测速推送(PUSH_KEY 保护)→ 写 KV nodes
-index.html         默认伪装首页(无敏感信息)
-deno.json          本地开发任务
+[上游订阅源 x N]
+      │  (sub-urls, 逗号分隔多个)
+      ▼
+[Mac mini: subs-check]  ← 测活 + 测速 + Claude解锁检测(media-check) + 重命名(国家/CL标签)
+      │  output/all.yaml
+      ▼
+[select_and_push.py]    ← 两桶配额选节点(CL优先→地区优先) + 三振出局历史追踪 + 总量上限
+      │  POST /push (base64)
+      ▼
+[Deno Deploy]           ← 存节点池,按"默认链接"或"客户端标签链接"分别截断数量、转换格式
+      │
+      ▼
+[家人设备]  sing-box / OpenClash / V2Box / v2rayN
 ```
 
-## 客户端标签(2026-07-18 新增)
+## 二、Mac mini 端目录结构
 
-同一个设备的订阅链接可以加一段客户端标签后缀,不用在后台切换格式:
+```
+~/nodepipe/
+  env                     ← 真实密钥/参数(不进git),从 env.example 复制改写
+  env.example              ← 模板
+  gen_config.sh             ← 读 env,生成 subs-check 的 config.yaml
+  select_and_push.py        ← 核心逻辑:选节点、三振出局历史、推送
+  select_and_push.sh         ← subs-check 的 callback-script,负责导出环境变量后调用上面的 python
+  force_retest.sh            ← 强制立即测活+推送一次(停daemon→前台跑一次→重启daemon)
+  bin/
+    subs-check               ← 测速程序本体
+    config.yaml               ← 由 gen_config.sh 生成,不要手改(会被覆盖)
+    output/
+      all.yaml                 ← 本轮测速结果
+      recent_history.txt        ← 三振出局机制:"最近还活过"的节点,当一个额外订阅源喂回去重测
+  state/
+    last_good.json             ← 按桶(vless/other)的最近一次成功结果缓存
+    node_history.json           ← 每个节点(协议:IP:端口)的最近存活/缺席记录("三振出局"用)
+  logs/
+    push.log                   ← 每次选节点+推送的详细记录
+    history.csv                 ← 每次结果摘要(可用数/命中地区/协议分布,趋势速查)
+    force_retest.log             ← 强制重测脚本的运行记录
 
-| 标签 | 格式 | 协议子集 | 适用客户端 |
-|---|---|---|---|
-| (无) | 设备默认 format | 全部 | 旧链接,兼容不变 |
-| `singbox` | sing-box JSON | 全部(含 anytls) | sing-box |
-| `clash` / `openclash` | Clash YAML | 全部(含 anytls) | OpenClash、mihomo |
-| `v2box` | base64 | 仅 vless+trojan | V2Box(Xray-core,不支持 anytls) |
-| `v2rayn` | base64 | 仅 vless+trojan | v2rayN(anytls 支持不稳定,先按此处理) |
-
-例:`https://域名/l/zhourg/78989/singbox`
-
-## 后台"状态"面板(2026-07-18 新增)
-
-后台多了一个"状态"标签页,只读,不含任何操作按钮:
-- **本批次**:从时间戳假节点的名字里解出这批是什么时候推的、是否有协议在吃缓存兜底(带 ⚠ 会额外提示),以及这批节点的协议分布(vless/anytls/trojan 各多少个,不含假节点)
-- **服务器**:部署地址、当前服务器时间、设备总数
-- **设备访问一览**:每台设备的累计访问次数 + 最近一次访问时间(跟设备管理页的信息一样,只是这里是纯只读一览表,不用来回切换)
-
-## 工具箱布局(2026-07-18 改版)
-
-从九宫格卡片改成了左侧工具列表 + 右侧内容区(`tools_ui.ts` 里的 `.tools-nav`/`.tool-panel`)。以后加新工具:左侧 `<nav>` 里加一个 `<a data-tool="xxx">`,右侧加一个 `<div class="tool-panel" id="tool-xxx">`,不用再考虑网格怎么排。
-
-## Mac mini 端:按协议桶的缓存兜底(2026-07-18 新增)
-
-`nodepipe/select_and_push.py` 把节点分两个独立配额桶选:vless 一桶,anytls+trojan 合并一桶("other"),各自按地区优先级排、各自截取,互相不补齐。
-
-问题:如果上游订阅源某次完全没有 vless 节点(实际发生过),`v2box`/`v2rayn` 这两个标签只要 vless+trojan,会直接变成空订阅。
-
-解决:每次推送成功后,把"这次有货"的桶存本地缓存(`~/nodepipe/state/last_good.json`,按桶分开存,不进 git)。下次如果某个桶又是空的,就用缓存顶上(哪怕是几天前的),而不是让依赖那个协议的客户端断供。用了缓存会在 push.log 里留 WARN,并且推送到订阅里的"时间戳假节点"名字后面会带 `⚠vless为缓存` / `⚠其他为缓存` 提示——不用翻日志,看客户端节点列表最后一条就知道这次是不是有协议在吃老本。
-
-## 设计原则
-
-- **职责隔离**:数据库只在 `kv.ts`,外观只在 `ui.ts`,配置只在 `config.ts`。改一处不波及其他。
-- **main.ts 极薄**:只分派,不含业务逻辑。
-- **加新功能的标准动作**:新建一个 `routes/xxx.ts`,在 `main.ts` 加一行分派。其余文件基本不动。
-
-## 加新路由的例子
-
-```ts
-// routes/stats.ts
-export async function handleStats(req: Request): Promise<Response> {
-  return new Response("...");
-}
+~/Library/LaunchAgents/
+  com.nodepipe.subscheck.plist     ← subs-check 常驻进程(KeepAlive,开机自启)
+  com.nodepipe.forceretest.plist    ← 4个定点任务(6:00/10:30/14:30/19:00),各自触发 force_retest.sh
 ```
 
-```ts
-// main.ts 里加一行
-import { handleStats } from "./routes/stats.ts";
-if (path === "/你的隐藏路径") return await handleStats(req);
+## 三、Deno 端(examples-hello-world 仓库)关键文件
+
+```
+main.ts                  ← 路由分派
+routes/subscribe.ts       ← 订阅出口:/l/{user}/{id}[/{clientTag}]
+protocol-filter.ts         ← 按协议前缀过滤 + 按订阅类型截断节点数量上限
+singbox.ts / clash.ts       ← 转换成 sing-box JSON / Clash YAML
+kv.ts                       ← 设备/节点池存储(Deno KV)
+ui.ts / tools_ui.ts          ← 管理后台页面
 ```
 
-## 环境变量(Deno Deploy → Settings → Environment Variables)
+**链接类型说明**:
+- **默认链接**(不带标签,如 `/l/张三/abcd1234`):走设备后台设置的格式(base64/singbox/clash),节点数量上限 **50**。
+- **客户端标签链接**(如 `/l/张三/abcd1234/v2box`):
+  - `singbox`、`clash`/`openclash` — 全协议(vless+anytls+trojan),数量上限 **30**
+  - `v2box`、`v2rayn` — 只保留 vless+trojan(这两个客户端不支持/不稳定支持 anytls),数量上限 **30**
 
-| 变量 | 说明 | 必填 |
+时间戳标记节点(名字形如"更新于 2026-07-30 14:30",指向 127.0.0.1 连不通)不计入以上任何数量上限，也不会被截断掉——它的作用只是让家人在客户端节点列表末尾一眼看出这批节点是什么时候推的。
+
+## 四、当前生效参数
+
+| 参数 | 值 | 说明 |
 |---|---|---|
-| SEED | 登录码总钥匙,最高机密 | 是 |
-| RESEND_API_KEY | 邮件密钥 re_xxx | 用邮件才填 |
-| ADMIN_EMAIL | 收件邮箱(免费版须=Resend 注册邮箱) | 用邮件才填 |
-| MAIL_FROM | 发件地址,默认 onboarding@resend.dev | 否 |
-| DATABASE_URL | Neon 连接串,用于领取日志归档+看板;不填则日志只留 KV 最近100条 | 否 |
+| 测速批次 | 6:00 / 10:30 / 14:30 / 19:00 | 由 launchd 的 `com.nodepipe.forceretest.plist` 触发,不再用 subs-check 自带的 cron-expression(它写不出"部分整点部分30分"的混合模式) |
+| 兜底调度 | check-interval: 1440分钟(24小时) | 万一 launchd 失效时的最后保险,不是主力调度 |
+| 测的协议 | vless / anytls / trojan | |
+| CL(Claude解锁)标签 | 仅作排序优先级,不再是硬过滤 | 之前把 `filter: "CL-"` 当硬性门槛,一次 media-check 抖动就把节点清零过,现改成能解锁 Claude 的节点在同协议桶内排最前 |
+| 最低速度 | 128 KB/s | |
+| Mac mini 选节点配额 | vless桶≤30、other(anytls+trojan)桶≤30,合计再砍到 GENERAL_CAP=50 | 两桶各自按"CL优先→地区优先(美>欧>亚)"排序截取,互不补齐 |
+| 安全兜底(全局) | 可用节点 < MIN_KEEP=10 则不推送 | 保留 Deno 端上次的好节点 |
+| 每桶三层兜底 | ①本轮新鲜结果 → ②last_good.json 缓存(桶整体为空时) → ③三振出局归档池(桶数量不够时垫底,未经本轮重新验证) | |
+| 三振出局窗口 | 连续3轮未出现 → 移出强制重测名单,转入归档 | 归档节点仍保留最后已知 URI,只在真的凑不够数时才会被拿出来当候选 |
+| 历史保活(subs-check自带) | keep-days: 28 | 与三振出局机制并存,是两层不同粒度的历史保留 |
+| 永久排除 | 香港 HK、澳门 MO(国家码 + 中英文关键词双重兜底) | |
+| Deno 默认链接上限 | 50 | 与 Mac mini 的 GENERAL_CAP 一致,属防御性重复校验 |
+| Deno 标签链接上限 | 每条 30 | singbox/clash/openclash/v2box/v2rayn 各自独立截断 |
 
-改环境变量后必须**重新部署**才生效。
+## 五、日常操作速查
 
-## 数据存哪
+### 换/加订阅源
+```bash
+nano ~/nodepipe/env          # SUB_URL 用逗号分隔多个: "https://a,https://b"
+~/nodepipe/gen_config.sh full
+launchctl unload ~/Library/LaunchAgents/com.nodepipe.subscheck.plist
+launchctl load ~/Library/LaunchAgents/com.nodepipe.subscheck.plist
+```
 
-- 设备名单、节点内容、节点历史、季度发信标记 → Deno KV(`kv.ts` 里的 key 前缀:`device` / `nodes` / `nodes_history` / `nodes_updated` / `sent`)。
-- SEED 等机密 → 环境变量,不入库、不入代码。
+### 手动立即测活+推送一次(不用等定点批次)
+```bash
+bash ~/nodepipe/force_retest.sh
+tail -60 ~/nodepipe/logs/force_retest.log
+```
 
-## 本次包含的功能
+### 看运行状态
+```bash
+launchctl list | grep nodepipe                    # 两个 launchd job 都在不在
+tail -30 ~/nodepipe/logs/push.log                   # 最近一次选节点+推送详情
+cat ~/nodepipe/logs/history.csv                      # 历史趋势(可用数/协议分布)
+cat ~/nodepipe/state/node_history.json | python3 -m json.tool   # 每个节点的存活/缺席记录
+```
 
-- 设备增删改、停用/启用、**换链接**(保留名字备注只换 id)
-- 复制链接、二维码
-- 节点整批替换、**保存前自动留历史**、**一键恢复上一版**、**防手滑存空**
-- **导出/恢复备份**(全部设备+节点存成 JSON)
-- **访问侦测**(每台显示最近访问时间+累计次数)
-- 登录码按季度派生轮换、应急查码入口
-- 季度换码自动发邮件、测试邮件
+### 一次性不设配额上限地全量推送(临时需求,不改 env)
+```bash
+PICK_VLESS=9999 PICK_OTHER=9999 GENERAL_CAP=9999 bash ~/nodepipe/select_and_push.sh
+```
 
-## 部署
+### 临时停 / 恢复自动化
+```bash
+launchctl unload ~/Library/LaunchAgents/com.nodepipe.subscheck.plist
+launchctl unload ~/Library/LaunchAgents/com.nodepipe.forceretest.plist
+# 恢复就把 unload 换成 load
+```
 
-GitHub 仓库连 Deno Deploy,入口 `main.ts`,push 自动部署。KV 在 Deno Deploy 默认可用,无需额外开关。
+## 六、已知限制 / 后续可优化方向
 
-## 后台"节点内容"编辑器(2026-07-18 加强)
-
-- 每个节点显示协议徽章 + 名字拆成的信息 badge(Mac mini 测速时写进节点名字里的内容,按 `|` 拆分显示,具体是什么字段取决于 subs-check 的配置,不是这边额外测的)
-- ↑↓ 手动排序,只在同一组(启用/停用)内挪动
-- "停用"按钮:停用的节点自动沉到列表最底,存回去时会打上 `#OFF# ` 前缀。这不是只在页面上看不见——`protocol-filter.ts` 的 `stripDisabled()` 会在返回给任何格式/客户端标签之前把这些行整个剔除,真正不会被推给客户端,随时可以点"启用"恢复
-- 批量勾选删除照旧保留
+- 三振出局归档池里的节点被当"垫底候选"推送时,**没有在当次重新验证**,只是最后已知可用的 URI——用它兜底总比完全没有强,但不是百分百保证能连通。
+- `recent_history.txt` 依赖 subs-check 自己的 8199 端口文件服务对外提供;如果哪天关闭了 `enable-web-ui` 或换了 `listen-port`,这个重测通道会失效,需要同步检查。
+- Deno 端目前存在过不同步的历史版本(不同时间点上传的 zip 内容不一致),合并代码前建议先确认线上实际部署的是哪个版本,避免在旧版本上重复叠加改动。
+- launchd 相关操作不要加 `sudo`——`~/Library/LaunchAgents/` 是用户级 agent,加 sudo 会导致 launchctl 去错误的域找文件。
