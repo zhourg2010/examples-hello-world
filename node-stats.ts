@@ -14,6 +14,8 @@ export interface NodeStats {
 
 // 时间戳假节点固定用这个 uuid+server 前缀(见 nodepipe/select_and_push.py 里的 marker_uri)
 const MARKER_PREFIX = "vless://00000000-0000-0000-0000-000000000000@127.0.0.1:1";
+// 后台"停用"的节点会加这个前缀(见 ui.ts),统计里不应该把它们算进协议计数。
+const OFF_PREFIX = "#OFF# ";
 
 export function computeNodeStats(raw: string): NodeStats {
   let text = raw.trim();
@@ -26,7 +28,9 @@ export function computeNodeStats(raw: string): NodeStats {
   let vless = 0, anytls = 0, trojan = 0;
   let batchLabel: string | null = null;
 
-  for (const line of lines) {
+  for (const rawLine of lines) {
+    if (rawLine.startsWith(OFF_PREFIX)) continue; // 已停用,不计入统计
+    const line = rawLine;
     if (line.startsWith(MARKER_PREFIX)) {
       const h = line.indexOf("#");
       if (h >= 0) {

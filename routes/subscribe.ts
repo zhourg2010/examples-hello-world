@@ -9,7 +9,7 @@ import { appendLog, getDevice, getNodes, recordHit } from "../kv.ts";
 import { maybeFlush } from "../db.ts";
 import { toSingboxJson } from "../singbox.ts";
 import { toClashYaml } from "../clash.ts";
-import { filterAndReencode, capNodeCount } from "../protocol-filter.ts";
+import { filterAndReencode, capNodeCount, stripDisabled } from "../protocol-filter.ts";
 
 // 默认(不带标签)链接的节点数量上限 / 每个客户端标签链接各自的节点数量上限。
 // 默认链接理论上已经在 Mac mini 那边的 GENERAL_CAP 控制在 50 以内了,这里再截一次
@@ -58,7 +58,7 @@ export async function handleSubscribe(parts: string[], req: Request): Promise<Re
   const ua = req.headers.get("user-agent") ?? "?";
   appendLog(username, ip, ua).then(() => maybeFlush()).catch(() => {});
 
-  const rawNodes = await getNodes();
+  const rawNodes = stripDisabled(await getNodes());
   const tag = parts[3] ? decodeURIComponent(parts[3]).toLowerCase() : "";
   const spec = tag ? CLIENT_TAGS[tag] : undefined;
 

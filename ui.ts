@@ -160,6 +160,10 @@ const CLIENT_TAG_LIST: { tag: string; label: string }[] = [
 
 const FORMAT_LABEL: Record<string, string> = { base64: "base64", singbox: "sing-box", clash: "clash" };
 
+// 手动加节点(见下方"追加节点"表单+客户端脚本里的 appendNodes)之后,总量的上限——
+// 跟 Mac mini 侧 select_and_push.py 的 GENERAL_CAP 保持一致的数字,超了就从末尾砍。
+const POOL_CAP = 50;
+
 // sing-box 客户端扫码"导入远程订阅"认的不是原始订阅 URL,而是它自己的深链接协议:
 // sing-box://import-remote-profile?url=<url编码后的订阅地址>#<url编码后的名字>
 // 直接把 https:// 订阅地址编进二维码,sing-box 扫出来不认识。"复制"按钮不受影响,
@@ -310,7 +314,7 @@ export function dashboardPage(opts: {
         </div>
 
         <h2 style="font-size:15px;margin-top:24px">追加节点</h2>
-        <p class="sub" style="margin-bottom:8px">粘贴一条或多条节点链接,一行一个。会自动跳过与已有列表重复的,追加的节点默认排在启用组最后面。</p>
+        <p class="sub" style="margin-bottom:8px">粘贴一条或多条节点链接,一行一个。会自动跳过与已有列表重复、或格式无法识别的行。新节点会插到启用组<strong>最前面</strong>,末尾的"自我节点"(时间戳)会自动刷新成现在的时间并加上"updated from web"提示;如果总数超过 ${POOL_CAP} 个,会从末尾自动移除多出来的(点下方"保存节点"才会真正生效)。</p>
         <textarea id="add-input" rows="4" style="width:100%" placeholder="vless://...&#10;anytls://...&#10;trojan://...&#10;vmess://...&#10;ss://..."></textarea>
         <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
           <button type="button" class="ghost" onclick="appendNodes()">追加到列表</button>
@@ -442,6 +446,16 @@ export function dashboardPage(opts: {
   // 不是只在这个页面看不见,是真的不会出现在任何格式/标签的订阅内容里。
   const b64enc = new TextEncoder(), b64dec = new TextDecoder();
   const OFF_PREFIX = '#OFF# ';
+  // 时间戳"自我节点"固定前缀(跟 nodepipe/select_and_push.py 的 marker_uri、node-stats.ts
+  // 的 MARKER_PREFIX 保持一致)。手动添加节点时要认出它、更新它,不能把它当成普通节点处理。
+  const MARKER_PREFIX = 'vless://00000000-0000-0000-0000-000000000000@127.0.0.1:1';
+  // 手动添加节点后的总量上限,跟 Mac mini 那边 select_and_push.py 的 GENERAL_CAP 保持一致——
+  // 超过了就从末尾砍,不然池子会无限膨胀到下一次 Mac mini 自动推送才被整体覆盖掉。
+  const POOL_CAP = ${POOL_CAP};
+  function fmtStamp(d){
+    const p = n => String(n).padStart(2,'0');
+    return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+  }
   function toB64(bytes){let s='';for(const b of bytes)s+=String.fromCharCode(b);return btoa(s);}
   function fromB64(b64){ try{ const s=atob(b64.trim()); const a=new Uint8Array(s.length); for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i); return a; }catch(e){ return null; } }
 
@@ -634,14 +648,51 @@ export function dashboardPage(opts: {
     const raw = document.getElementById('add-input').value;
     const lines = raw.split(/\\r?\\n/).map(s=>s.trim()).filter(Boolean);
     const existing = new Set(nodeLines.map(n=>n.uri));
-    let added = 0, skipped = 0;
+    const toAdd = [];
+    let skipped = 0, invalid = 0;
     for(const l of lines){
+      // 必须是认识的协议 URI,且不能是伪装成"自我节点"的行——那个位置只能由这里自动生成。
+      if(!/^(vmess|vless|trojan|anytls|ss|ssr):\\/\\//i.test(l) || l.startsWith(MARKER_PREFIX)){ invalid++; continue; }
       if(existing.has(l)){ skipped++; continue; }
-      nodeLines.push({ uri: l, disabled: false }); existing.add(l); added++;
+      toAdd.push(l); existing.add(l);
     }
     document.getElementById('add-input').value='';
-    document.getElementById('add-msg').textContent = added+' 条已追加'+(skipped?(','+skipped+' 条重复已跳过'):'');
-    if(added>0){ markDirty(); renderNodeList(); }
+    if(toAdd.length===0){
+      document.getElementById('add-msg').textContent = '没有可添加的节点'+(skipped?(','+skipped+' 条重复'):'')+(invalid?(','+invalid+' 条格式无效已跳过'):'');
+      return;
+    }
+
+    // 插到最前面(不是原来的追加到末尾),这样所有链接下一次拉取时这批新节点排最靠前。
+    const newItems = toAdd.map(uri=>({ uri, disabled:false }));
+    nodeLines = [...newItems, ...nodeLines];
+
+    // 找到(或没有就视为不存在)现有的"自我节点",挪出来,刷新时间戳+加提示,重新放到末尾。
+    const markerIdx = nodeLines.findIndex(n=>n.uri.startsWith(MARKER_PREFIX));
+    if(markerIdx>=0) nodeLines.splice(markerIdx,1);
+    const stamp = '更新于 ' + fmtStamp(new Date()) + ' updated from web';
+    const markerUri = MARKER_PREFIX + '?encryption=none&security=none&type=tcp#' + encodeURIComponent(stamp);
+    nodeLines.push({ uri: markerUri, disabled:false });
+
+    // 超过总量上限(不含自我节点、不含已停用的)就从末尾砍掉多出来的,保持跟 Mac mini 那边同一个上限。
+    const realEnabledIdxs = () => nodeLines
+      .map((n,i)=>({n,i}))
+      .filter(({n})=>!n.disabled && !n.uri.startsWith(MARKER_PREFIX))
+      .map(({i})=>i);
+    let dropped = 0;
+    let idxs = realEnabledIdxs();
+    while(idxs.length > POOL_CAP){
+      nodeLines.splice(idxs[idxs.length-1], 1);
+      dropped++;
+      idxs = realEnabledIdxs();
+    }
+
+    document.getElementById('add-msg').textContent =
+      toAdd.length+' 条已添加到最前面,自我节点已更新'
+      +(dropped?(','+dropped+' 条从末尾移除(超出上限 '+POOL_CAP+')'):'')
+      +(skipped?(','+skipped+' 条重复已跳过'):'')
+      +(invalid?(','+invalid+' 条格式无效已跳过'):'');
+    markDirty();
+    renderNodeList();
   }
   function prepareSaveNodes(form){
     settleGroups();

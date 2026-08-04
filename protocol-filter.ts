@@ -25,6 +25,18 @@ function reencode(lines: string[]): string {
   return btoa(joined);
 }
 
+// 后台"停用"某个节点时,ui.ts 存回 KV 前会给那一行加上 OFF_PREFIX 前缀(不是真的删除,
+// 方便随时再启用)。任何返回给客户端的订阅内容,在别的处理之前都先经过这里,把这些行
+// 整个剔除——不然 default/singbox/clash 这几条不做协议前缀过滤的链接会直接把
+// "#OFF# vless://..." 这种半吊子行原样吐给客户端,不仅停用不生效,还会把下游解析搞坏。
+const OFF_PREFIX = "#OFF# ";
+
+export function stripDisabled(raw: string): string {
+  const lines = decodeToLines(raw);
+  const kept = lines.filter((l) => !l.startsWith(OFF_PREFIX));
+  return reencode(kept);
+}
+
 export function filterAndReencode(raw: string, allowedPrefixes: string[]): string {
   const lines = decodeToLines(raw);
   const kept = lines.filter((l) => allowedPrefixes.some((p) => l.startsWith(p)));
