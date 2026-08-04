@@ -160,6 +160,17 @@ const CLIENT_TAG_LIST: { tag: string; label: string }[] = [
 
 const FORMAT_LABEL: Record<string, string> = { base64: "base64", singbox: "sing-box", clash: "clash" };
 
+// sing-box 客户端扫码"导入远程订阅"认的不是原始订阅 URL,而是它自己的深链接协议:
+// sing-box://import-remote-profile?url=<url编码后的订阅地址>#<url编码后的名字>
+// 直接把 https:// 订阅地址编进二维码,sing-box 扫出来不认识。"复制"按钮不受影响,
+// 依然给原始订阅地址(手动粘贴导入等场景还是需要原始地址)。
+function qrPayloadFor(format: string, url: string, name: string): string {
+  if (format === "singbox") {
+    return `sing-box://import-remote-profile?url=${encodeURIComponent(url)}#${encodeURIComponent(name)}`;
+  }
+  return url;
+}
+
 function tagNodeCount(tag: string, stats: NodeStats): number {
   // v2box/v2rayn 标签只保留 vless+trojan(不支持 anytls);其余标签是全协议池
   if (tag === "v2box" || tag === "v2rayn") return stats.vless + stats.trojan;
@@ -181,23 +192,26 @@ export function dashboardPage(opts: {
     const link = `${origin}/l/${encodeURIComponent(d.username)}/${d.id}`;
     const j = JSON.stringify(link);
     const fmt = d.format ?? "base64";
+    const qj = JSON.stringify(qrPayloadFor(fmt, link, d.username));
     const detailId = `taglinks-${d.id}`;
     const defaultRow = `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--bd2)">
         <span style="min-width:170px;font-weight:600;font-size:12px">默认格式(${FORMAT_LABEL[fmt]},不带标签)</span>
         <code style="font-size:11px;flex:1;overflow:auto;color:var(--muted)">${link}</code>
         <span class="tag" style="flex-shrink:0">${nodeStats.total} 个有效节点</span>
         <button type="button" class="ghost" onclick='copyLink(${j},this)'>复制</button>
+        <button type="button" class="ghost" onclick='showQR(${qj})'>二维码</button>
       </div>`;
     const tagRows = CLIENT_TAG_LIST.map(({ tag, label }) => {
       const tagLink = `${link}/${tag}`;
       const tj = JSON.stringify(tagLink);
+      const qrj = JSON.stringify(qrPayloadFor(tag === "singbox" ? "singbox" : "", tagLink, `${d.username}-${tag}`));
       const count = tagNodeCount(tag, nodeStats);
       return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--bd2)">
         <span style="min-width:170px;font-weight:600;font-size:12px">${label}</span>
         <code style="font-size:11px;flex:1;overflow:auto;color:var(--muted)">${tagLink}</code>
         <span class="tag" style="flex-shrink:0">${count} 个有效节点</span>
         <button type="button" class="ghost" onclick='copyLink(${tj},this)'>复制</button>
-        <button type="button" class="ghost" onclick='showQR(${tj})'>二维码</button>
+        <button type="button" class="ghost" onclick='showQR(${qrj})'>二维码</button>
       </div>`;
     }).join("");
     return `<tr>
@@ -209,7 +223,7 @@ export function dashboardPage(opts: {
       <td><button type="button" class="ghost" onclick="toggleDeviceDetail('${detailId}')">链接</button></td>
       <td><div class="actions">
         <button type="button" class="ghost" onclick='copyLink(${j},this)'>复制</button>
-        <button type="button" class="ghost" onclick='showQR(${j})'>二维码</button>
+        <button type="button" class="ghost" onclick='showQR(${qj})'>二维码</button>
         <a href="?user=${encodeURIComponent(d.username)}"><button type="button" class="ghost">详情</button></a>
         <form method="post"><input type="hidden" name="action" value="switchformat"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" title="当前默认 ${FORMAT_LABEL[fmt]},点击切换(不带标签的旧链接会跟着变)">默认格式</button></form>
         <form method="post"><input type="hidden" name="action" value="rotate"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" onclick="return confirm('换链接后旧链接立即失效,需重新发给对方。继续?')">换链接</button></form>
