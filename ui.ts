@@ -197,6 +197,7 @@ export function dashboardPage(opts: {
         <code style="font-size:11px;flex:1;overflow:auto;color:var(--muted)">${tagLink}</code>
         <span class="tag" style="flex-shrink:0">${count} 个有效节点</span>
         <button type="button" class="ghost" onclick='copyLink(${tj},this)'>复制</button>
+        <button type="button" class="ghost" onclick='showQR(${tj})'>二维码</button>
       </div>`;
     }).join("");
     return `<tr>
