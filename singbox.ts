@@ -190,13 +190,17 @@ export function toSingboxJson(input: string): string {
     dns: {
       // sing-box 1.12+ 新版 DNS server 格式(type + server,不再用 address 里塞 scheme 前缀)。
       servers: [
-        { type: "tls", tag: "remote", server: "8.8.8.8" },
+        { type: "https", tag: "remote", server: "dns.google", "server_port": 443,"path": "/dns-query", "detour": "proxy" },
         // 不写 detour:"direct" —— sing-box 1.12+ 里给 detour 指向一个没有特殊配置的
         // 普通 direct 出站会被判定为"没有意义"直接报 FATAL 拒绝启动(官方几个 issue 里
         // 都在讨论这个反直觉的校验行为)。不写 detour 本来就是默认直连,效果一样。
-        { type: "udp", tag: "local", server: "223.5.5.5" },
+        { type: "udp", tag: "local", server: "223.5.5.5" } 
       ],
-      final: "remote",
+      "rules": [
+        { "domain": [ "geosite:cn" ],"server": "local" },
+        { "domain": [ "geosite:geolocation-!cn" ],"server": "remote"}
+        ],
+      final: "local",
       strategy: "prefer_ipv4",
     },
     inbounds: [
