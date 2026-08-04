@@ -188,15 +188,17 @@ export function toSingboxJson(input: string): string {
   const config = {
     log: { level: "warn", timestamp: true },
     dns: {
+      // sing-box 1.12+ 新版 DNS server 格式(type + server,不再用 address 里塞 scheme 前缀)。
       servers: [
-        { tag: "remote", address: "tls://8.8.8.8" },
-        { tag: "local", address: "223.5.5.5", detour: "direct" },
+        { type: "tls", tag: "remote", server: "8.8.8.8" },
+        { type: "udp", tag: "local", server: "223.5.5.5", detour: "direct" },
       ],
-      rules: [{ outbound: "any", server: "local" }],
+      final: "remote",
       strategy: "prefer_ipv4",
     },
     inbounds: [
-      { type: "tun", tag: "tun-in", inet4_address: "172.19.0.1/30", auto_route: true, strict_route: true, stack: "system", sniff: true },
+      // sniff/domain_strategy 这些字段 1.13.0 已经从 inbound 里移除,改到 route.rules 里用 action 表达(见下)。
+      { type: "tun", tag: "tun-in", address: ["172.19.0.1/30"], auto_route: true, strict_route: true, stack: "system" },
       { type: "mixed", tag: "mixed-in", listen: "127.0.0.1", listen_port: 2080 },
     ],
     outbounds: [
@@ -204,12 +206,20 @@ export function toSingboxJson(input: string): string {
       { type: "urltest", tag: "auto", outbounds: proxyTags, url: "http://www.gstatic.com/generate_204", interval: "3m", tolerance: 50 },
       ...nodes,
       { type: "direct", tag: "direct" },
+      // 注意:不再需要单独的 { type: "dns", tag: "dns-out" } 出站 —— "特殊出站" 写法
+      // 1.13.0 已移除,DNS 劫持现在直接用下面 route.rules 里的 hijack-dns action。
     ],
     route: {
       rules: [
+        // 替代原来 inbound.sniff:true(两个入站都要嗅探,所以不加 inbound 过滤条件)
+        { action: "sniff" },
+        // 替代原来的 dns 特殊出站 + protocol:"dns"路由规则组合
         { protocol: "dns", action: "hijack-dns" },
         { ip_is_private: true, outbound: "direct" },
       ],
+      // 替代原来 dns.rules 里 { outbound: "any", server: "local" } 这条已废弃的写法:
+      // 各出站自己做域名解析(比如给节点的 server 字段解析IP)时,默认走本地 DNS。
+      default_domain_resolver: { server: "local" },
       final: "select",
       auto_detect_interface: true,
     },
