@@ -186,11 +186,12 @@ export function dashboardPage(opts: {
   nodes: string;
   nodesUpdated: number;
   nodeStats: NodeStats;
+  usNodeStats: NodeStats;
   origin: string;
   hasHistory: boolean;
   notice?: string;
 }): string {
-  const { devices, nodes, nodesUpdated, nodeStats, origin, hasHistory, notice = "" } = opts;
+  const { devices, nodes, nodesUpdated, nodeStats, usNodeStats, origin, hasHistory, notice = "" } = opts;
 
   const rows = devices.map((d) => {
     const link = `${origin}/l/${encodeURIComponent(d.username)}/${d.id}`;
@@ -218,6 +219,13 @@ export function dashboardPage(opts: {
         <button type="button" class="ghost" onclick='showQR(${qrj})'>二维码</button>
       </div>`;
     }).join("");
+    const usRow = d.usEnabled ? `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--bd2)">
+        <span style="min-width:170px;font-weight:600;font-size:12px">🇺🇸 美国节点组(隐藏链接)</span>
+        <code style="font-size:11px;flex:1;overflow:auto;color:var(--muted)">${link}/us</code>
+        <span class="tag" style="flex-shrink:0">${usNodeStats.total} 个有效节点</span>
+        <button type="button" class="ghost" onclick='copyLink(${JSON.stringify(`${link}/us`)},this)'>复制</button>
+        <button type="button" class="ghost" onclick='showQR(${JSON.stringify(qrPayloadFor(fmt, `${link}/us`, `${d.username}-us`))})'>二维码</button>
+      </div>` : "";
     return `<tr>
       <td><strong>${escapeHtml(d.username)}</strong></td>
       <td style="color:var(--muted)">${escapeHtml(d.note)}</td>
@@ -232,6 +240,7 @@ export function dashboardPage(opts: {
         <form method="post"><input type="hidden" name="action" value="switchformat"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" title="当前默认 ${FORMAT_LABEL[fmt]},点击切换(不带标签的旧链接会跟着变)">默认格式</button></form>
         <form method="post"><input type="hidden" name="action" value="rotate"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" onclick="return confirm('换链接后旧链接立即失效,需重新发给对方。继续?')">换链接</button></form>
         <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost">${d.enabled ? "停用" : "启用"}</button></form>
+        <form method="post"><input type="hidden" name="action" value="toggleus"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" title="激活后该设备可以用 /us 后缀拉取美国节点组(隐藏链接,不激活的话这条链接直接404)">${d.usEnabled ? "停用US组" : "激活US组"}</button></form>
         <form method="post" onsubmit="return confirm('删除 ${escapeHtml(d.username)} ?')"><input type="hidden" name="action" value="del"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="danger">删除</button></form>
       </div></td></tr>
       <tr class="device-detail-tr" id="${detailId}" style="display:none">
@@ -240,6 +249,7 @@ export function dashboardPage(opts: {
             <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:6px">全部链接(含默认格式和按客户端类型的标签链接)</div>
             ${defaultRow}
             ${tagRows}
+            ${usRow}
           </div>
         </td>
       </tr>`;
@@ -274,6 +284,7 @@ export function dashboardPage(opts: {
             <option value="singbox">sing-box</option>
             <option value="clash">clash(OpenClash/mihomo)</option>
           </select>
+          <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);white-space:nowrap"><input type="checkbox" name="usenabled">同时激活US节点组</label>
           <button>添加设备</button></form>
         <div class="tablewrap"><table><tr><th>用户名</th><th>设备码</th><th>状态</th><th>格式</th><th>最近访问</th><th>链接</th><th>操作</th></tr>
           ${rows || `<tr><td colspan="7" style="color:var(--muted)">暂无设备</td></tr>`}</table></div>
