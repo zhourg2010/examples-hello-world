@@ -5,7 +5,7 @@
 //   这是给同一台设备可能装了多个 App(比如 sing-box + V2Box 互相备用)的场景——
 //   不用在后台来回切换格式,直接给两条不同后缀的链接即可。
 
-import { appendLog, getDevice, getNodes, recordHit } from "../kv.ts";
+import { appendLog, getDevice, getNodes, getUsNodes, recordHit } from "../kv.ts";
 import { maybeFlush } from "../db.ts";
 import { toSingboxJson } from "../singbox.ts";
 import { toClashYaml } from "../clash.ts";
@@ -16,6 +16,9 @@ import { filterAndReencode, capNodeCount, stripDisabled } from "../protocol-filt
 // 是防御性的——就算上游哪天推送了超量的池子,Deno 这边也不会把超量的都吐给客户端。
 const DEFAULT_CAP = 50;
 const TAG_CAP = 30;
+// /us(隐藏的"美国节点组"链接)：Mac mini 那边已经按最近一次成功排序只推 top 50 过来,
+// 这里再截一次是防御性的,跟其他 CAP 常量一个道理。
+const US_CAP = 50;
 
 type ClientFormat = "base64" | "singbox" | "clash";
 
@@ -60,6 +63,16 @@ export async function handleSubscribe(parts: string[], req: Request): Promise<Re
 
   const rawNodes = stripDisabled(await getNodes());
   const tag = parts[3] ? decodeURIComponent(parts[3]).toLowerCase() : "";
+
+  // /us:隐藏的"美国节点组"链接,数据来源跟主节点池完全分开(见 kv.ts getUsNodes +
+  // nodepipe/us_archive.py)。没在后台激活的设备访问这个后缀直接 404,跟不存在的标签一样——
+  // 这就是它"隐藏"的地方:不知道要开、没被显式激活,就完全看不出这条链接存在。
+  if (tag === "us") {
+    if (!dev.usEnabled) return new Response("Not Found", { status: 404 });
+    const usNodes = capNodeCount(await getUsNodes(), US_CAP);
+    return renderByFormat((dev.format ?? "base64") as ClientFormat, usNodes);
+  }
+
   const spec = tag ? CLIENT_TAGS[tag] : undefined;
 
   if (tag && !spec) {

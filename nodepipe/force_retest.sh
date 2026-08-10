@@ -37,6 +37,15 @@ else
   log "ERROR: one-shot check exited non-zero, check $LOG for details"
 fi
 
+log "probing US node archive (/us) and pushing top results..."
+source ~/nodepipe/env
+export PUSH_URL PUSH_KEY
+if /opt/local/bin/python3.12 "$HOME/nodepipe/us_archive.py" >> "$HOME/nodepipe/logs/us_archive.log" 2>&1; then
+  log "us_archive.py finished OK"
+else
+  log "WARN: us_archive.py exited non-zero, check logs/us_archive.log for details (main /push already succeeded regardless)"
+fi
+
 log "restarting daemon ($LABEL)..."
 launchctl load "$PLIST" 2>>"$LOG" || log "WARN: reload failed, daemon may not be running until next boot"
 

@@ -4,7 +4,7 @@ import { ADMIN_PATH, AUTH_MAX_AGE } from "../config.ts";
 import { genId, isAuthed, isValidCode } from "../auth.ts";
 import {
   addDevice, deleteDevice, exportBackup, getNodeHistory, getNodes,
-  getNodesUpdated, importBackup, listDevices, restorePrevNodes,
+  getNodesUpdated, getUsNodes, importBackup, listDevices, restorePrevNodes,
   saveNodes, setDevice,
 } from "../kv.ts";
 import { sendMail } from "../mail.ts";
@@ -16,11 +16,13 @@ import { computeNodeStats } from "../node-stats.ts";
 async function render(origin: string, notice = ""): Promise<Response> {
   const devices = await listDevices();
   const nodes = await getNodes();
+  const usNodes = await getUsNodes();
   return html(dashboardPage({
     devices,
     nodes,
     nodesUpdated: await getNodesUpdated(),
     nodeStats: computeNodeStats(nodes),
+    usNodeStats: computeNodeStats(usNodes),
     origin,
     hasHistory: (await getNodeHistory()).length > 0,
     notice,
@@ -63,12 +65,20 @@ export async function handleAdmin(req: Request, url: URL): Promise<Response> {
       if (!note) note = Array.from({ length: 8 }, () => Math.floor(Math.random() * 10)).join("");
       const formatRaw = String(f.get("format") ?? "base64");
       const format = formatRaw === "singbox" ? "singbox" : formatRaw === "clash" ? "clash" : "base64";
+      const usEnabled = f.get("usenabled") === "on";
       await addDevice(
         String(f.get("username") ?? "").trim(),
         genId(),
         note,
         format,
+        usEnabled,
       );
+      return redirect(ADMIN_PATH);
+    }
+    if (action === "toggleus") { // /us 隐藏链接的激活开关
+      const u = String(f.get("username") ?? "");
+      const dev = (await listDevices()).find((d) => d.username === u);
+      if (dev) await setDevice(u, { usEnabled: !dev.usEnabled });
       return redirect(ADMIN_PATH);
     }
     if (action === "switchformat") {

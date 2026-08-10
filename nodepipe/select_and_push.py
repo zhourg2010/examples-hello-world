@@ -13,10 +13,17 @@
 
 import os
 import sys
+import socket
 import base64
 import urllib.parse
 import urllib.request
 import urllib.error
+
+try:
+    import geoip  # 本地 GeoIP 国家核查(见 nodepipe/geoip.py),用来验证/us 档案里的节点
+    _GEOIP_AVAILABLE = True
+except Exception:
+    _GEOIP_AVAILABLE = False
 
 PUSH_URL = os.environ.get("PUSH_URL", "").strip()
 PUSH_KEY = os.environ.get("PUSH_KEY", "").strip()
@@ -34,6 +41,12 @@ HISTORY_FILE = os.path.expanduser("~/nodepipe/state/node_history.json")
 # 写到 subs-check 的 output-dir 下,靠它自带的 8199 文件服务对外提供,
 # 再把这个 URL 加进 sub-urls,下一轮 subs-check 就会真的把这些节点纳入重测。
 RECENT_RETEST_FILE = os.path.expanduser("~/nodepipe/bin/output/recent_history.txt")
+
+# "美国节点组"永久档案(/us 隐藏链接的数据源,见 nodepipe/us_archive.py)。
+# 跟上面的三振出局历史是两回事:那个是短期的、非US节点也适用、超过阈值基本就不再管了;
+# 这个只收US节点、永久保留、由 us_archive.py 单独定期做连通性探测+推送,这里只负责
+# "这一轮 subs-check 测活通过的US节点,记一笔最新成功时间"。
+US_ARCHIVE_FILE = os.path.expanduser("~/nodepipe/state/us_archive.json")
 
 # Region priority by country code found in node name (subs-check rename format: e.g. US_24, GB_4, JP_5)
 US = {"US"}
@@ -325,6 +338,70 @@ def update_node_history(candidates: list) -> dict:
     return history
 
 
+def update_us_archive(candidates: list) -> None:
+    """/us 隐藏链接的数据源之一:这一轮 subs-check 测活+测速都通过、且经本地 GeoIP 库
+    核实服务器 IP 确实在美国的节点,在永久档案里记一笔"刚刚成功"。
+    真正决定 last_ok 的还有另一路——us_archive.py 单独对档案里所有节点做 TCP 连通性
+    探测,两路谁更新就用谁的时间戳。这个档案不会因为一时连不上就清空条目,只有
+    us_archive.py 里按 US_ARCHIVE_MAX_AGE_DAYS 才会真正清掉太久没成功过的。
+
+    两段判断:
+    1. subs-check 自己的 iprisk 检测在节点名里打的国家标签,用来先筛一遍候选(便宜、
+       省得对不相关的节点也做DNS解析)。
+    2. 本地 GeoIP 库(见 geoip.py)对该节点服务器的真实 IP 做权威核实——标签说是US
+       但 GeoIP 库查出来不是,就不收录;GeoIP 库这次不可用(下载失败且从没成功过)时,
+       退化成只信标签,并在日志里明确写清楚这次是降级模式,不是静默出错。
+    """
+    archive = load_json(US_ARCHIVE_FILE)
+    now = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M")
+    updated = 0
+    geoip_rejected = 0
+    geoip_ok = _GEOIP_AVAILABLE and geoip.ensure_geoip_db()
+    if _GEOIP_AVAILABLE and not geoip_ok:
+        log("WARN: GeoIP DB unavailable this run, /us archive falling back to trusting "
+            "subs-check's own country tag only (no independent IP verification this round)")
+    elif not _GEOIP_AVAILABLE:
+        log("WARN: geoip.py not found, /us archive trusting subs-check's country tag only")
+
+    for p in candidates:
+        name = str(p.get("name", ""))
+        if country_of(name) != "US":
+            continue  # 第一层:标签先筛一遍
+
+        if geoip_ok:
+            server = str(p.get("server", ""))
+            ip = server
+            # server 字段可能是域名不是IP,先尝试解析成IP再查GeoIP库(查不到IP就没法核实,跳过这条)
+            try:
+                socket.inet_aton(server)
+            except OSError:
+                try:
+                    ip = socket.gethostbyname(server)
+                except Exception:
+                    log(f"WARN: could not resolve '{server}' to an IP, skipping GeoIP check for this node")
+                    ip = None
+            real_country = geoip.country_of_ip(ip) if ip else None
+            if real_country is not None and real_country != "US":
+                geoip_rejected += 1
+                continue  # 第二层:GeoIP 核实不是US,直接不收录,不管标签怎么说
+            # real_country is None(查不到/库没数据)时,不因为"验证不了"就拒绝——
+            # 退化成信标签,跟 geoip_ok=False 时的整体降级策略一致。
+
+        builder = BUILDERS.get(p.get("type"))
+        uri = builder(p) if builder else ""
+        if not uri:
+            continue
+        ident = identity_of(p)
+        entry = archive.get(ident, {})
+        entry.update({"uri": uri, "name": name, "last_ok": now,
+                      "first_seen": entry.get("first_seen", now)})
+        archive[ident] = entry
+        updated += 1
+    save_json(US_ARCHIVE_FILE, archive)
+    log(f"--- us archive: {updated} US node(s) confirmed alive this run "
+        f"({geoip_rejected} tagged US but GeoIP-rejected; archive now holds {len(archive)} total) ---")
+
+
 def archived_uris_for_bucket(history: dict, bucket: str, exclude_ids: set, limit: int) -> list:
     """从三振出局归档池里取最后已知可用的 URI 当垫底候选(未在本轮重新验证过)。
     只有前面'新鲜结果 + last_good 桶缓存'两层都还凑不够数时才会用到。"""
@@ -358,6 +435,7 @@ def main():
         sys.exit(0)
 
     history = update_node_history(candidates)
+    update_us_archive(candidates)
 
     vless_pool = [p for p in candidates if p.get("type") == "vless"]
     other_pool = [p for p in candidates if p.get("type") in ("anytls", "trojan")]
