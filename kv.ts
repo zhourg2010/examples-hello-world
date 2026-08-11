@@ -89,32 +89,75 @@ export async function saveUsNodes(content: string): Promise<void> {
   await kv.set(["us_nodes_updated"], Date.now());
 }
 
-// 功能1:保存节点前,先把当前版本压入历史(用于恢复上一版)
+// 功能1:保存节点前,先把当前版本存一份历史快照(用于恢复上一版)。
+//
+// 之前的实现是把全部历史快照塞进*同一个* KV value(一个 string[] 数组),NODE_HISTORY=5
+// 意味着最多同时存5份完整快照在一个 value 里——GENERAL_CAP 从10提到50之后,单份快照
+// 本身变大了几倍,5份加起来就超过了 Deno KV 单个 value 65536 字节的硬上限,导致 saveNodes
+// 直接抛 "Value too large" 把整次 /push 搞挂(这是2026-08已经在生产上真实炸过一次的bug)。
+// 现在改成:每份快照各自存成独立的 key(["nodes_history", 时间戳]),上限不再是"5份快照
+// 加起来"而是"每一份快照自己"要小于65536字节——不管以后节点数量/GENERAL_CAP怎么调整,
+// 历史记录这块都不会再因为累积而撞上限。
+async function nextHistorySeq(): Promise<number> {
+  // 用严格递增的序号而不是时间戳排序——时间戳精度是毫秒,两次保存离得够近(比如手动连续
+  // 点了两次"强制重测")会撞上同一毫秒,排序就会乱,进而删错该保留的记录(测试时真的复现过)。
+  // 序号不依赖系统时钟精度,永远严格递增。
+  const res = await kv.get<number>(["nodes_history_seq"]);
+  const next = (res.value ?? 0) + 1;
+  await kv.set(["nodes_history_seq"], next);
+  return next;
+}
+
+async function trimHistory(): Promise<void> {
+  const entries: { key: Deno.KvKey; seq: number }[] = [];
+  for await (const e of kv.list<string>({ prefix: ["nodes_history"] })) {
+    const seq = e.key[1] as number;
+    entries.push({ key: e.key, seq });
+  }
+  entries.sort((a, b) => b.seq - a.seq); // 新的在前
+  const toDelete = entries.slice(NODE_HISTORY);
+  for (const e of toDelete) {
+    await kv.delete(e.key);
+  }
+}
+
 export async function saveNodes(content: string): Promise<void> {
   const prev = await getNodes();
   if (prev) {
-    const hist = (await kv.get<string[]>(["nodes_history"])).value ?? [];
-    hist.unshift(prev);
-    await kv.set(["nodes_history"], hist.slice(0, NODE_HISTORY));
+    await kv.set(["nodes_history", await nextHistorySeq()], prev);
+    await trimHistory();
   }
   await kv.set(["nodes"], content);
   await kv.set(["nodes_updated"], Date.now());
 }
 
 export async function getNodeHistory(): Promise<string[]> {
-  return (await kv.get<string[]>(["nodes_history"])).value ?? [];
+  const entries: { seq: number; value: string }[] = [];
+  for await (const e of kv.list<string>({ prefix: ["nodes_history"] })) {
+    if (e.value != null) entries.push({ seq: e.key[1] as number, value: e.value });
+  }
+  entries.sort((a, b) => b.seq - a.seq); // 新的在前,跟原来数组语义(unshift)保持一致
+  return entries.map((e) => e.value);
 }
 
 // 恢复上一版:把最近的历史取出设为当前,当前再压回历史
 export async function restorePrevNodes(): Promise<boolean> {
-  const hist = (await kv.get<string[]>(["nodes_history"])).value ?? [];
-  if (hist.length === 0) return false;
-  const prev = hist.shift()!;
+  const entries: { key: Deno.KvKey; seq: number; value: string }[] = [];
+  for await (const e of kv.list<string>({ prefix: ["nodes_history"] })) {
+    if (e.value != null) entries.push({ key: e.key, seq: e.key[1] as number, value: e.value });
+  }
+  if (entries.length === 0) return false;
+  entries.sort((a, b) => b.seq - a.seq);
+  const latest = entries[0];
+
   const cur = await getNodes();
-  await kv.set(["nodes"], prev);
+  await kv.set(["nodes"], latest.value);
   await kv.set(["nodes_updated"], Date.now());
-  if (cur) hist.unshift(cur);
-  await kv.set(["nodes_history"], hist.slice(0, NODE_HISTORY));
+  await kv.delete(latest.key);
+  if (cur) {
+    await kv.set(["nodes_history", await nextHistorySeq()], cur);
+  }
+  await trimHistory();
   return true;
 }
 
