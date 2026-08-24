@@ -33,7 +33,11 @@ export async function handleSubscribe(parts: string[], req: Request): Promise<Re
   const ua = req.headers.get("user-agent") ?? "?";
   // 记下访问的是哪条格式链接,后台才能在每条链接下面列出"谁在用它"。
   // 记日志放在标签校验**之后**:访问了不存在的后缀本来就会 404,没必要记一笔。
-  appendLog(username, ip, ua, tag).then(() => maybeFlush()).catch(() => {});
+  // X-HWID:客户端**主动**发来的硬件标识。目前只见过 Karing 支持(按订阅的开关,默认关)。
+  // 我们不去索取,发了才记 —— HTTP 本身没有任何字段能给出主机名或设备 ID,这是唯一途径。
+  // 截断一下,避免有人拿超长的头把 KV 记录撑爆。
+  const hwid = (req.headers.get("x-hwid") ?? "").trim().slice(0, 64);
+  appendLog(username, ip, ua, tag, hwid).then(() => maybeFlush()).catch(() => {});
 
   // 数量上限在这里统一截一次。Mac 端 MAX_NODES 已经控制在 100 以内了,这里再截是
   // 防御性的——就算上游哪天推了超量的池子,Deno 这边也不会把超量的都吐给客户端。
