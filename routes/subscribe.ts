@@ -23,15 +23,17 @@ export async function handleSubscribe(parts: string[], req: Request): Promise<Re
     return new Response("Not Found", { status: 404 });
   }
 
-  recordHit(username).catch(() => {});
-  const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "?";
-  const ua = req.headers.get("user-agent") ?? "?";
-  appendLog(username, ip, ua).then(() => maybeFlush()).catch(() => {});
-
   const tag = parts[3] ? decodeURIComponent(parts[3]).toLowerCase() : "";
   if (tag && !FORMATS[tag]) {
     return new Response("Unknown client tag", { status: 404 });
   }
+
+  recordHit(username).catch(() => {});
+  const ip = (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "?";
+  const ua = req.headers.get("user-agent") ?? "?";
+  // 记下访问的是哪条格式链接,后台才能在每条链接下面列出"谁在用它"。
+  // 记日志放在标签校验**之后**:访问了不存在的后缀本来就会 404,没必要记一笔。
+  appendLog(username, ip, ua, tag).then(() => maybeFlush()).catch(() => {});
 
   // 数量上限在这里统一截一次。Mac 端 MAX_NODES 已经控制在 100 以内了,这里再截是
   // 防御性的——就算上游哪天推了超量的池子,Deno 这边也不会把超量的都吐给客户端。

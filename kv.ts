@@ -199,19 +199,22 @@ export interface LogEntry {
   ts: number;
   ip: string;
   ua: string;
+  // 访问的是哪条格式链接("" = 不带后缀的默认链接)。
+  // 2026-08 之前的老记录没有这个字段,读出来是 undefined,UI 侧按"未知"处理。
+  tag?: string;
 }
 
 const KEEP_RECENT = 100;
 
 // 原子递增 seq 并写入一条日志
-export async function appendLog(username: string, ip: string, ua: string): Promise<void> {
+export async function appendLog(username: string, ip: string, ua: string, tag = ""): Promise<void> {
   while (true) {
     const cur = await kv.get<number>(["log_seq"]);
     const seq = (cur.value ?? 0) + 1;
     const r = await kv.atomic()
       .check(cur)
       .set(["log_seq"], seq)
-      .set(["log", seq], { username, ts: Date.now(), ip, ua })
+      .set(["log", seq], { username, ts: Date.now(), ip, ua, tag })
       .commit();
     if (r.ok) break; // 冲突则重试
   }
@@ -239,6 +242,47 @@ export async function getUnarchivedLogs(): Promise<LogEntry[]> {
 export async function setFlushedSeq(seq: number): Promise<void> {
   const cur = (await kv.get<number>(["flushed_seq"])).value ?? 0;
   if (seq > cur) await kv.set(["flushed_seq"], seq);
+}
+
+// 后台链接列表用:某用户最近的访问记录,按"访问的是哪条链接"分组。
+//
+// 只扫 KV 缓冲里那最多 ~100 条(见 KEEP_RECENT)。更早的已经归档进 Neon 了,
+// 这里刻意不去查数据库——后台首页每次渲染都要跑这个,不该为了多几条历史记录
+// 就在首页上挂一次跨网络的 SQL 查询。想看完整历史点"详情"进用户看板。
+//
+// 每个 (链接, UA, IP) 组合只保留最近一次,并累计次数 —— 同一台设备每隔几小时
+// 自动拉一次订阅,不去重的话列表里会全是同一个客户端的重复行。
+export interface DeviceHit {
+  tag: string;      // "" = 不带后缀的默认链接
+  ua: string;
+  ip: string;
+  last: number;     // 最近一次访问的时间戳
+  count: number;    // 在这 ~100 条缓冲里出现了几次
+}
+
+export async function getRecentDevicesByTag(username: string): Promise<Map<string, DeviceHit[]>> {
+  const merged = new Map<string, DeviceHit>();
+  for await (const e of kv.list<Omit<LogEntry, "seq">>({ prefix: ["log"] })) {
+    if (e.value.username !== username) continue;
+    const tag = e.value.tag ?? "";
+    const key = `${tag}\u0000${e.value.ua}\u0000${e.value.ip}`;
+    const prev = merged.get(key);
+    if (prev) {
+      prev.count++;
+      if (e.value.ts > prev.last) prev.last = e.value.ts;
+    } else {
+      merged.set(key, { tag, ua: e.value.ua, ip: e.value.ip, last: e.value.ts, count: 1 });
+    }
+  }
+
+  const byTag = new Map<string, DeviceHit[]>();
+  for (const hit of merged.values()) {
+    const list = byTag.get(hit.tag) ?? [];
+    list.push(hit);
+    byTag.set(hit.tag, list);
+  }
+  for (const list of byTag.values()) list.sort((a, b) => b.last - a.last);
+  return byTag;
 }
 
 // 某用户最近 n 条领取记录(从 KV 缓冲取,最多扫 ~100 条)

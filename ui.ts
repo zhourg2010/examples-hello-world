@@ -3,7 +3,8 @@
 // 架构不变:服务端渲染(form POST + 303 redirect),没有改成 SPA。
 
 import { ADMIN_EMAIL } from "./config.ts";
-import type { Device } from "./kv.ts";
+import type { Device, DeviceHit } from "./kv.ts";
+import { parseUa } from "./ua.ts";
 import type { NodeStats } from "./node-stats.ts";
 import { ALL_PROTOS, countFor, DEFAULT_FORMAT, DEFAULT_FORMAT_TAGS, FORMATS, type FormatSpec, LISTED_FORMATS } from "./formats.ts";
 
@@ -183,13 +184,43 @@ function qrPayloadFor(format: string, url: string, name: string): string {
 // "实际有几个节点"是按 formats.ts 里登记的协议支持表算的,跟订阅出口用的是同一张表,
 // 所以不会出现后台写 100、客户端只解析出 12 个这种对不上的情况(Surge 尤其明显:
 // 它不支持 vless/anytls,数字通常远小于其他格式)。
+// 一条链接下面的"最近在用的客户端"。
+//
+// 能显示什么受限于订阅接口能拿到什么:一个普通 HTTP GET,没有 cookie 也没有设备标识,
+// 只有 User-Agent + IP + 时间。所以这里认出来的是**客户端类型**,不是设备身份——
+// 两台都装了小火箭的 iPhone 在这儿长得一模一样。真要区分人/设备,靠的是每台设备一条
+// 不同的订阅链接(不同用户名+id),不是靠这个列表。
+function deviceList(hits: DeviceHit[]): string {
+  if (hits.length === 0) {
+    return `<div style="font-size:11px;color:var(--muted);margin:4px 0 0 150px;opacity:.65">还没有客户端拉过这条链接</div>`;
+  }
+  const rows = hits.slice(0, 6).map((h) => {
+    const info = parseUa(h.ua);
+    const name = info.known
+      ? `${escapeHtml(info.client)}${info.version ? " " + escapeHtml(info.version) : ""}`
+      : `<span style="opacity:.6">未识别的客户端</span>`;
+    const plat = info.known && info.platform ? `<span style="opacity:.6"> · ${escapeHtml(info.platform)}</span>` : "";
+    // title 里放原始 UA:认不出来的客户端也能鼠标悬停看到它到底发了什么
+    return `<div style="display:flex;align-items:center;gap:8px;font-size:11px;padding:1px 0" title="${escapeHtml(h.ua)}">
+      <span style="min-width:190px">${name}${plat}</span>
+      <span style="color:var(--muted);min-width:120px">${escapeHtml(h.ip)}</span>
+      <span style="color:var(--muted)">${timeAgo(h.last)}${h.count > 1 ? ` · ${h.count} 次` : ""}</span>
+    </div>`;
+  }).join("");
+  const more = hits.length > 6
+    ? `<div style="font-size:11px;color:var(--muted);opacity:.7">…另有 ${hits.length - 6} 个</div>`
+    : "";
+  return `<div style="margin:5px 0 0 150px;padding-left:10px;border-left:2px solid var(--bd2)">${rows}${more}</div>`;
+}
+
 function linkRow(
   spec: FormatSpec,
   url: string,
   qr: string,
   count: number,
   total: number,
-  variants: { spec: FormatSpec; url: string }[] = [],
+  variants: { spec: FormatSpec; url: string; hits: DeviceHit[] }[] = [],
+  hits: DeviceHit[] = [],
 ): string {
   const short = count < total
     ? `<span class="tag" style="flex-shrink:0" title="节点池共 ${total} 个,这个格式支持的协议只覆盖其中 ${count} 个">${count} / ${total} 个节点</span>`
@@ -203,13 +234,14 @@ function linkRow(
         <button type="button" class="ghost" onclick='showQR(${JSON.stringify(qr)})'>二维码</button>
       </div>
       <div style="font-size:11px;color:var(--muted);margin:3px 0 0 150px">
-        支持:${escapeHtml(spec.clients)}${spec.note ? `<br><span style="color:var(--accent)">${escapeHtml(spec.note)}</span>` : ""}
+        支持:${escapeHtml(spec.clients)}${spec.note ? `<br><span style="color:var(--muted);font-style:italic">${escapeHtml(spec.note)}</span>` : ""}
       </div>
+      ${deviceList(hits)}
       ${variants.map((v) => `<div style="display:flex;align-items:center;gap:8px;margin:5px 0 0 150px;font-size:11px">
-        <span style="color:var(--accent);font-weight:600;flex-shrink:0">↳ ${escapeHtml(v.spec.clients)}</span>
+        <span style="color:var(--fg);opacity:.75;font-weight:600;flex-shrink:0">↳ ${escapeHtml(v.spec.clients)}</span>
         <code style="font-size:10px;flex:1;overflow:auto;color:var(--muted)">${escapeHtml(v.url)}</code>
         <button type="button" class="ghost" style="padding:2px 8px;font-size:10px" onclick='copyLink(${JSON.stringify(v.url)},this)'>复制</button>
-      </div>${v.spec.note ? `<div style="font-size:11px;color:var(--muted);margin:2px 0 0 166px">${escapeHtml(v.spec.note)}</div>` : ""}`).join("")}
+      </div>${v.spec.note ? `<div style="font-size:11px;color:var(--muted);margin:2px 0 0 166px;font-style:italic">${escapeHtml(v.spec.note)}</div>` : ""}${deviceList(v.hits)}`).join("")}
     </div>`;
 }
 
@@ -218,11 +250,13 @@ export function dashboardPage(opts: {
   nodes: string;
   nodesUpdated: number;
   nodeStats: NodeStats;
+  // 每台设备各条链接下"最近在用的客户端"。key 是用户名。
+  devicesByTag: Map<string, Map<string, DeviceHit[]>>;
   origin: string;
   hasHistory: boolean;
   notice?: string;
 }): string {
-  const { devices, nodes, nodesUpdated, nodeStats, origin, hasHistory, notice = "" } = opts;
+  const { devices, nodes, nodesUpdated, nodeStats, devicesByTag, origin, hasHistory, notice = "" } = opts;
 
   const rows = devices.map((d) => {
     const link = `${origin}/l/${encodeURIComponent(d.username)}/${d.id}`;
@@ -236,18 +270,22 @@ export function dashboardPage(opts: {
     const defaultRow = linkRow(
       { ...defSpec, label: `${defSpec.label}(默认,不带后缀)` },
       link, qrPayloadFor(fmt, link, d.username),
-      countFor(defSpec, nodeStats.byProto), nodeStats.total,
+      countFor(defSpec, nodeStats.byProto), nodeStats.total, [],
+      // 不带后缀的链接在日志里 tag 记的是空串
+      (devicesByTag.get(d.username) ?? new Map()).get("") ?? [],
     );
 
+    const hitsOf = devicesByTag.get(d.username) ?? new Map<string, DeviceHit[]>();
     const tagRows = LISTED_FORMATS.map((spec) => {
       const tagLink = `${link}/${spec.tag}`;
       const variants = (spec.variants ?? [])
         .map((v) => FORMATS[v])
         .filter(Boolean)
-        .map((vs) => ({ spec: vs, url: `${link}/${vs.tag}` }));
+        .map((vs) => ({ spec: vs, url: `${link}/${vs.tag}`, hits: hitsOf.get(vs.tag) ?? [] }));
       return linkRow(
         spec, tagLink, qrPayloadFor(spec.tag, tagLink, `${d.username}-${spec.tag}`),
         countFor(spec, nodeStats.byProto), nodeStats.total, variants,
+        hitsOf.get(spec.tag) ?? [],
       );
     }).join("");
 
