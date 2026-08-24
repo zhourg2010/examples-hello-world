@@ -5,6 +5,7 @@
 import { ADMIN_EMAIL } from "./config.ts";
 import type { Device } from "./kv.ts";
 import type { NodeStats } from "./node-stats.ts";
+import { ALL_PROTOS, countFor, DEFAULT_FORMAT, DEFAULT_FORMAT_TAGS, FORMATS, type FormatSpec } from "./formats.ts";
 
 export function escapeHtml(s: unknown): string {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -151,18 +152,20 @@ export function noticeHtml(msg: string, good: boolean): string {
   return `<div class="notice ${good ? "good" : "bad"}">${escapeHtml(msg)}</div>`;
 }
 
-const CLIENT_TAG_LIST: { tag: string; label: string }[] = [
-  { tag: "singbox", label: "sing-box(全协议)" },
-  { tag: "clash", label: "OpenClash/mihomo(全协议)" },
-  { tag: "v2box", label: "V2Box(vless+trojan)" },
-  { tag: "v2rayn", label: "v2rayN(vless+trojan)" },
-];
+// 后台"全部链接"里要列出来的后缀。顺序就是显示顺序;openclash 是 clash 的纯别名,
+// 老链接还在用但没必要在后台再占一行,所以不列。
+// 状态页协议占比条的配色,顺序跟 ALL_PROTOS 一一对应。
+const PROTO_COLORS = ["#ec3013", "#9d5fc9", "#2f9e5b", "#d98a00", "#2d7fd3"];
 
-const FORMAT_LABEL: Record<string, string> = { base64: "base64", singbox: "sing-box", clash: "clash" };
+const LINK_TAGS = ["clash", "singbox", "base64", "surge", "quanx", "loon", "v2box", "v2rayn"];
+
+function formatLabel(tag: string | undefined): string {
+  return FORMATS[tag ?? ""]?.label ?? FORMATS[DEFAULT_FORMAT].label;
+}
 
 // 手动加节点(见下方"追加节点"表单+客户端脚本里的 appendNodes)之后,总量的上限——
-// 跟 Mac mini 侧 select_and_push.py 的 GENERAL_CAP 保持一致的数字,超了就从末尾砍。
-const POOL_CAP = 50;
+// 跟 config.ts 的 NODE_CAP / Mac 端 select_and_push.py 的 MAX_NODES 是同一个数,超了就从末尾砍。
+const POOL_CAP = 100;
 
 // sing-box 客户端扫码"导入远程订阅"认的不是原始订阅 URL,而是它自己的深链接协议:
 // sing-box://import-remote-profile?url=<url编码后的订阅地址>#<url编码后的名字>
@@ -175,10 +178,26 @@ function qrPayloadFor(format: string, url: string, name: string): string {
   return url;
 }
 
-function tagNodeCount(tag: string, stats: NodeStats): number {
-  // v2box/v2rayn 标签只保留 vless+trojan(不支持 anytls);其余标签是全协议池
-  if (tag === "v2box" || tag === "v2rayn") return stats.vless + stats.trojan;
-  return stats.total;
+// 一条链接在后台列表里的那一行:格式名 + 支持它的客户端 + 这条链接实际有几个节点。
+// "实际有几个节点"是按 formats.ts 里登记的协议支持表算的,跟订阅出口用的是同一张表,
+// 所以不会出现后台写 100、客户端只解析出 12 个这种对不上的情况(Surge 尤其明显:
+// 它不支持 vless/anytls,数字通常远小于其他格式)。
+function linkRow(spec: FormatSpec, url: string, qr: string, count: number, total: number): string {
+  const short = count < total
+    ? `<span class="tag" style="flex-shrink:0" title="节点池共 ${total} 个,这个格式支持的协议只覆盖其中 ${count} 个">${count} / ${total} 个节点</span>`
+    : `<span class="tag" style="flex-shrink:0">${count} 个节点</span>`;
+  return `<div style="padding:7px 0;border-bottom:1px solid var(--bd2)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="min-width:150px;font-weight:600;font-size:12px">${escapeHtml(spec.label)}</span>
+        <code style="font-size:11px;flex:1;overflow:auto;color:var(--muted)">${escapeHtml(url)}</code>
+        ${short}
+        <button type="button" class="ghost" onclick='copyLink(${JSON.stringify(url)},this)'>复制</button>
+        <button type="button" class="ghost" onclick='showQR(${JSON.stringify(qr)})'>二维码</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin:2px 0 0 150px">
+        支持的客户端:${escapeHtml(spec.clients)}${spec.note ? `<br><span style="color:var(--accent)">${escapeHtml(spec.note)}</span>` : ""}
+      </div>
+    </div>`;
 }
 
 export function dashboardPage(opts: {
@@ -186,70 +205,58 @@ export function dashboardPage(opts: {
   nodes: string;
   nodesUpdated: number;
   nodeStats: NodeStats;
-  usNodeStats: NodeStats;
   origin: string;
   hasHistory: boolean;
   notice?: string;
 }): string {
-  const { devices, nodes, nodesUpdated, nodeStats, usNodeStats, origin, hasHistory, notice = "" } = opts;
+  const { devices, nodes, nodesUpdated, nodeStats, origin, hasHistory, notice = "" } = opts;
 
   const rows = devices.map((d) => {
     const link = `${origin}/l/${encodeURIComponent(d.username)}/${d.id}`;
     const j = JSON.stringify(link);
-    const fmt = d.format ?? "base64";
+    const fmt = d.format ?? DEFAULT_FORMAT;
+    const defSpec = FORMATS[fmt] ?? FORMATS[DEFAULT_FORMAT];
     const qj = JSON.stringify(qrPayloadFor(fmt, link, d.username));
     const detailId = `taglinks-${d.id}`;
-    const defaultRow = `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--bd2)">
-        <span style="min-width:170px;font-weight:600;font-size:12px">默认格式(${FORMAT_LABEL[fmt]},不带标签)</span>
-        <code style="font-size:11px;flex:1;overflow:auto;color:var(--muted)">${link}</code>
-        <span class="tag" style="flex-shrink:0">${nodeStats.total} 个有效节点</span>
-        <button type="button" class="ghost" onclick='copyLink(${j},this)'>复制</button>
-        <button type="button" class="ghost" onclick='showQR(${qj})'>二维码</button>
-      </div>`;
-    const tagRows = CLIENT_TAG_LIST.map(({ tag, label }) => {
+
+    // 不带后缀的那条链接:走设备设置的默认格式
+    const defaultRow = linkRow(
+      { ...defSpec, label: `${defSpec.label}(默认,不带后缀)` },
+      link, qrPayloadFor(fmt, link, d.username),
+      countFor(defSpec, nodeStats.byProto), nodeStats.total,
+    );
+
+    const tagRows = LINK_TAGS.map((tag) => {
+      const spec = FORMATS[tag];
       const tagLink = `${link}/${tag}`;
-      const tj = JSON.stringify(tagLink);
-      const qrj = JSON.stringify(qrPayloadFor(tag === "singbox" ? "singbox" : "", tagLink, `${d.username}-${tag}`));
-      const count = tagNodeCount(tag, nodeStats);
-      return `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--bd2)">
-        <span style="min-width:170px;font-weight:600;font-size:12px">${label}</span>
-        <code style="font-size:11px;flex:1;overflow:auto;color:var(--muted)">${tagLink}</code>
-        <span class="tag" style="flex-shrink:0">${count} 个有效节点</span>
-        <button type="button" class="ghost" onclick='copyLink(${tj},this)'>复制</button>
-        <button type="button" class="ghost" onclick='showQR(${qrj})'>二维码</button>
-      </div>`;
+      return linkRow(
+        spec, tagLink, qrPayloadFor(tag, tagLink, `${d.username}-${tag}`),
+        countFor(spec, nodeStats.byProto), nodeStats.total,
+      );
     }).join("");
-    const usRow = d.usEnabled ? `<div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--bd2)">
-        <span style="min-width:170px;font-weight:600;font-size:12px">🇺🇸 美国节点组(隐藏链接)</span>
-        <code style="font-size:11px;flex:1;overflow:auto;color:var(--muted)">${link}/us</code>
-        <span class="tag" style="flex-shrink:0">${usNodeStats.total} 个有效节点</span>
-        <button type="button" class="ghost" onclick='copyLink(${JSON.stringify(`${link}/us`)},this)'>复制</button>
-        <button type="button" class="ghost" onclick='showQR(${JSON.stringify(qrPayloadFor(fmt, `${link}/us`, `${d.username}-us`))})'>二维码</button>
-      </div>` : "";
+
     return `<tr>
       <td><strong>${escapeHtml(d.username)}</strong></td>
       <td style="color:var(--muted)">${escapeHtml(d.note)}</td>
       <td><span class="status ${d.enabled ? "on" : "off"}">${d.enabled ? "启用" : "停用"}</span></td>
-      <td><span class="tag">${FORMAT_LABEL[fmt]}(默认)</span></td>
+      <td><span class="tag">${escapeHtml(formatLabel(fmt))}</span></td>
       <td class="hits">${timeAgo(d.lastSeen)}<br><span style="opacity:.7">共 ${d.hits ?? 0} 次</span></td>
       <td><button type="button" class="ghost" onclick="toggleDeviceDetail('${detailId}')">链接</button></td>
       <td><div class="actions">
         <button type="button" class="ghost" onclick='copyLink(${j},this)'>复制</button>
         <button type="button" class="ghost" onclick='showQR(${qj})'>二维码</button>
         <a href="?user=${encodeURIComponent(d.username)}"><button type="button" class="ghost">详情</button></a>
-        <form method="post"><input type="hidden" name="action" value="switchformat"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" title="当前默认 ${FORMAT_LABEL[fmt]},点击切换(不带标签的旧链接会跟着变)">默认格式</button></form>
+        <form method="post"><input type="hidden" name="action" value="switchformat"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" title="当前默认 ${escapeHtml(formatLabel(fmt))},点击轮换到下一种(不带后缀的那条链接会跟着变)">默认格式</button></form>
         <form method="post"><input type="hidden" name="action" value="rotate"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" onclick="return confirm('换链接后旧链接立即失效,需重新发给对方。继续?')">换链接</button></form>
         <form method="post"><input type="hidden" name="action" value="toggle"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost">${d.enabled ? "停用" : "启用"}</button></form>
-        <form method="post"><input type="hidden" name="action" value="toggleus"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="ghost" title="激活后该设备可以用 /us 后缀拉取美国节点组(隐藏链接,不激活的话这条链接直接404)">${d.usEnabled ? "停用US组" : "激活US组"}</button></form>
         <form method="post" onsubmit="return confirm('删除 ${escapeHtml(d.username)} ?')"><input type="hidden" name="action" value="del"><input type="hidden" name="username" value="${escapeHtml(d.username)}"><button class="danger">删除</button></form>
       </div></td></tr>
       <tr class="device-detail-tr" id="${detailId}" style="display:none">
         <td colspan="7" style="background:var(--bg);padding:14px 20px 16px">
           <div style="margin-left:22px;border-left:3px solid var(--bd);padding-left:16px">
-            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:6px">全部链接(含默认格式和按客户端类型的标签链接)</div>
+            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:6px">全部链接(每种格式标注了支持它的客户端,以及这条链接实际能给到多少个节点)</div>
             ${defaultRow}
             ${tagRows}
-            ${usRow}
           </div>
         </td>
       </tr>`;
@@ -280,11 +287,9 @@ export function dashboardPage(opts: {
           <input name="username" placeholder="用户名(如 dell3600_kingGarden)" required>
           <input name="note" placeholder="设备码(留空自动生成数字)">
           <select name="format">
-            <option value="base64">base64(v2rayN/Shadowrocket/V2Box)</option>
-            <option value="singbox">sing-box</option>
-            <option value="clash">clash(OpenClash/mihomo)</option>
+            ${(DEFAULT_FORMAT_TAGS as readonly string[]).map((t) =>
+              `<option value="${t}"${t === DEFAULT_FORMAT ? " selected" : ""}>${escapeHtml(FORMATS[t].label)}</option>`).join("")}
           </select>
-          <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);white-space:nowrap"><input type="checkbox" name="usenabled">同时激活US节点组</label>
           <button>添加设备</button></form>
         <div class="tablewrap"><table><tr><th>用户名</th><th>设备码</th><th>状态</th><th>格式</th><th>最近访问</th><th>链接</th><th>操作</th></tr>
           ${rows || `<tr><td colspan="7" style="color:var(--muted)">暂无设备</td></tr>`}</table></div>
@@ -355,18 +360,14 @@ export function dashboardPage(opts: {
               : "—"
           }</td></tr>
           <tr><th>节点数(不含时间戳假节点)</th><td>
-            <strong>${nodeStats.total}</strong> 个 — vless <strong>${nodeStats.vless}</strong> · anytls <strong>${nodeStats.anytls}</strong> · trojan <strong>${nodeStats.trojan}</strong>
+            <strong>${nodeStats.total}</strong> 个 — ${ALL_PROTOS.map((p) => `${p} <strong>${nodeStats.byProto[p]}</strong>`).join(" · ")}
             ${nodeStats.total > 0 ? `
-            <div class="proto-stack">${[
-              { n: nodeStats.vless, color: "#ec3013" },
-              { n: nodeStats.anytls, color: "#9d5fc9" },
-              { n: nodeStats.trojan, color: "#2f9e5b" },
-            ].filter((s) => s.n > 0).map((s) => `<div class="proto-stack-seg" style="width:${(s.n / nodeStats.total * 100).toFixed(1)}%;background:${s.color}"></div>`).join("")}</div>
-            <div class="proto-legend">
-              <span><i style="background:#ec3013"></i>vless ${nodeStats.total ? Math.round(nodeStats.vless / nodeStats.total * 100) : 0}%</span>
-              <span><i style="background:#9d5fc9"></i>anytls ${nodeStats.total ? Math.round(nodeStats.anytls / nodeStats.total * 100) : 0}%</span>
-              <span><i style="background:#2f9e5b"></i>trojan ${nodeStats.total ? Math.round(nodeStats.trojan / nodeStats.total * 100) : 0}%</span>
-            </div>` : ""}
+            <div class="proto-stack">${ALL_PROTOS.map((p, i) => ({ n: nodeStats.byProto[p], color: PROTO_COLORS[i] }))
+              .filter((x) => x.n > 0)
+              .map((x) => `<div class="proto-stack-seg" style="width:${(x.n / nodeStats.total * 100).toFixed(1)}%;background:${x.color}"></div>`).join("")}</div>
+            <div class="proto-legend">${ALL_PROTOS.map((p, i) => nodeStats.byProto[p] > 0
+              ? `<span><i style="background:${PROTO_COLORS[i]}"></i>${p} ${Math.round(nodeStats.byProto[p] / nodeStats.total * 100)}%</span>`
+              : "").join("")}</div>` : ""}
           </td></tr>
         </table></div>
         ${nodeStats.batchLabel && nodeStats.batchLabel.includes("⚠") ? `<div class="notice bad" style="margin-top:12px">这批节点里有协议在吃缓存兜底(标签里带 ⚠),说明 Mac mini 上一轮该协议没测出新节点。</div>` : ""}
@@ -460,7 +461,7 @@ export function dashboardPage(opts: {
   // 时间戳"自我节点"固定前缀(跟 nodepipe/select_and_push.py 的 marker_uri、node-stats.ts
   // 的 MARKER_PREFIX 保持一致)。手动添加节点时要认出它、更新它,不能把它当成普通节点处理。
   const MARKER_PREFIX = 'vless://00000000-0000-0000-0000-000000000000@127.0.0.1:1';
-  // 手动添加节点后的总量上限,跟 Mac mini 那边 select_and_push.py 的 GENERAL_CAP 保持一致——
+  // 手动添加节点后的总量上限,跟 config.ts 的 NODE_CAP、Mac 端 select_and_push.py 的 MAX_NODES 保持一致——
   // 超过了就从末尾砍,不然池子会无限膨胀到下一次 Mac mini 自动推送才被整体覆盖掉。
   const POOL_CAP = ${POOL_CAP};
   function fmtStamp(d){

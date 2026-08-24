@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS 调度模板。__PYTHON__ / __RUN_ONCE__ / __LOGS__ 三个占位符由
+  install_scheduler.py 在安装时替换成真实绝对路径,不要手工填。
+
+  安装:  python3 install_scheduler.py install
+  卸载:  python3 install_scheduler.py uninstall
+  查看:  launchctl list | grep nodepipe
+
+  注意:launchctl 操作 ~/Library/LaunchAgents/ 下的用户级 agent **不要加 sudo**,
+  加了会让 launchctl 去 root 的域里找文件,报"找不到"之类的莫名其妙的错。
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nodepipe.runonce</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON__</string>
+        <string>__RUN_ONCE__</string>
+    </array>
+
+    <!-- 4 个定点批次:6:00 / 10:30 / 14:30 / 19:00。
+         拆成 4 条 StartCalendarInterval 而不是用一条 cron 表达式,是因为 cron 的
+         分钟字段对所有小时统一生效,写不出"有的整点有的 30 分"这种混合模式。 -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>10</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>30</integer></dict>
+        <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>__LOGS__/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOGS__/launchd.err.log</string>
+
+    <!-- 开机时不立刻跑一轮,等下一个定点。想立刻跑就手动 python3 run_once.py -->
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

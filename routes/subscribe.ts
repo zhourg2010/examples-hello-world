@@ -1,52 +1,19 @@
 // routes/subscribe.ts — 家人拉订阅:/l/{username}/{id}[/{clientTag}]
 //
-// 不带 clientTag(旧链接,兼容):按设备后台设置的 format 返回,全量协议池,行为不变。
-// 带 clientTag:该客户端的"格式 + 协议子集"由 CLIENT_TAGS 表决定,覆盖设备的默认 format。
-//   这是给同一台设备可能装了多个 App(比如 sing-box + V2Box 互相备用)的场景——
+// 不带 clientTag(旧链接,兼容):按设备后台设置的默认格式返回。
+// 带 clientTag:该客户端的"格式 + 协议子集"由 formats.ts 的登记表决定,覆盖设备的默认格式。
+//   这是给同一台设备可能装了多个 App(比如 sing-box + Surge 互相备用)的场景——
 //   不用在后台来回切换格式,直接给两条不同后缀的链接即可。
+//
+// 2026-08 起节点池本身就只有美国节点了(Mac 端 select_and_push.py 做的严格 GeoIP 筛选),
+// 所以以前那条隐藏的 /us "美国节点组"链接已经没有存在意义,连同 /push-us、KV 里的
+// us_nodes、设备上的 usEnabled 开关一起整条链路都删掉了。
 
-import { appendLog, getDevice, getNodes, getUsNodes, recordHit } from "../kv.ts";
+import { appendLog, getDevice, getNodes, recordHit } from "../kv.ts";
 import { maybeFlush } from "../db.ts";
-import { toSingboxJson } from "../singbox.ts";
-import { toClashYaml } from "../clash.ts";
-import { filterAndReencode, capNodeCount, stripDisabled } from "../protocol-filter.ts";
-
-// 默认(不带标签)链接的节点数量上限 / 每个客户端标签链接各自的节点数量上限。
-// 默认链接理论上已经在 Mac mini 那边的 GENERAL_CAP 控制在 50 以内了,这里再截一次
-// 是防御性的——就算上游哪天推送了超量的池子,Deno 这边也不会把超量的都吐给客户端。
-const DEFAULT_CAP = 50;
-const TAG_CAP = 30;
-// /us(隐藏的"美国节点组"链接)：Mac mini 那边已经按最近一次成功排序只推 top 50 过来,
-// 这里再截一次是防御性的,跟其他 CAP 常量一个道理。
-const US_CAP = 50;
-
-type ClientFormat = "base64" | "singbox" | "clash";
-
-interface ClientTagSpec {
-  format: ClientFormat;
-  // null = 全协议,不过滤;否则只保留这些前缀开头的节点行
-  allowedPrefixes: string[] | null;
-}
-
-const CLIENT_TAGS: Record<string, ClientTagSpec> = {
-  singbox: { format: "singbox", allowedPrefixes: null },
-  clash: { format: "clash", allowedPrefixes: null },
-  openclash: { format: "clash", allowedPrefixes: null },
-  // V2Box(Xray-core)不支持 anytls,只给 vless/trojan
-  v2box: { format: "base64", allowedPrefixes: ["vless://", "trojan://"] },
-  // v2rayN 当前版本 anytls 支持不稳定,先按 vless/trojan 处理
-  v2rayn: { format: "base64", allowedPrefixes: ["vless://", "trojan://"] },
-};
-
-function renderByFormat(format: ClientFormat, nodes: string): Response {
-  if (format === "singbox") {
-    return new Response(toSingboxJson(nodes), { headers: { "content-type": "application/json; charset=utf-8" } });
-  }
-  if (format === "clash") {
-    return new Response(toClashYaml(nodes), { headers: { "content-type": "text/yaml; charset=utf-8" } });
-  }
-  return new Response(nodes, { headers: { "content-type": "text/plain; charset=utf-8" } });
-}
+import { NODE_CAP } from "../config.ts";
+import { FORMATS, renderFormat } from "../formats.ts";
+import { capNodeCount, stripDisabled } from "../protocol-filter.ts";
 
 export async function handleSubscribe(parts: string[], req: Request): Promise<Response> {
   // parts = ["l", username, id, clientTag?]
@@ -61,31 +28,15 @@ export async function handleSubscribe(parts: string[], req: Request): Promise<Re
   const ua = req.headers.get("user-agent") ?? "?";
   appendLog(username, ip, ua).then(() => maybeFlush()).catch(() => {});
 
-  const rawNodes = stripDisabled(await getNodes());
   const tag = parts[3] ? decodeURIComponent(parts[3]).toLowerCase() : "";
-
-  // /us:隐藏的"美国节点组"链接,数据来源跟主节点池完全分开(见 kv.ts getUsNodes +
-  // nodepipe/us_archive.py)。没在后台激活的设备访问这个后缀直接 404,跟不存在的标签一样——
-  // 这就是它"隐藏"的地方:不知道要开、没被显式激活,就完全看不出这条链接存在。
-  if (tag === "us") {
-    if (!dev.usEnabled) return new Response("Not Found", { status: 404 });
-    const usNodes = capNodeCount(await getUsNodes(), US_CAP);
-    return renderByFormat((dev.format ?? "base64") as ClientFormat, usNodes);
-  }
-
-  const spec = tag ? CLIENT_TAGS[tag] : undefined;
-
-  if (tag && !spec) {
+  if (tag && !FORMATS[tag]) {
     return new Response("Unknown client tag", { status: 404 });
   }
 
-  if (spec) {
-    const filtered = spec.allowedPrefixes ? filterAndReencode(rawNodes, spec.allowedPrefixes) : rawNodes;
-    const nodes = capNodeCount(filtered, TAG_CAP);
-    return renderByFormat(spec.format, nodes);
-  }
+  // 数量上限在这里统一截一次。Mac 端 MAX_NODES 已经控制在 100 以内了,这里再截是
+  // 防御性的——就算上游哪天推了超量的池子,Deno 这边也不会把超量的都吐给客户端。
+  // 时间戳标记节点不计入上限,也不会被截掉。
+  const nodes = capNodeCount(stripDisabled(await getNodes()), NODE_CAP);
 
-  // 无标签:旧行为,走设备后台设置的默认格式,全量协议池(截到 DEFAULT_CAP)
-  const nodes = capNodeCount(rawNodes, DEFAULT_CAP);
-  return renderByFormat((dev.format ?? "base64") as ClientFormat, nodes);
+  return renderFormat(tag || dev.format, nodes);
 }

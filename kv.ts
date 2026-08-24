@@ -2,6 +2,7 @@
 // 别的文件不直接碰 KV,一律调用这里的函数。将来改存储结构只动这一个文件。
 
 import { NODE_HISTORY } from "./config.ts";
+import { DEFAULT_FORMAT } from "./formats.ts";
 
 const kv = await Deno.openKv();
 
@@ -11,11 +12,13 @@ export interface Device {
   id: string;
   enabled: boolean;
   note?: string;
-  format?: "base64" | "singbox" | "clash"; // 默认订阅返回格式(不带客户端标签的旧链接走这个),默认 base64
+  // 默认订阅返回格式(不带客户端标签的链接走这个)。取值是 formats.ts 登记表里的 tag,
+  // 现在默认是 clash(以前是 base64)。存成 string 而不是联合类型,是因为加一种新格式时
+  // 不该再回来改这个文件——formatOf() 对认不出来的值会退回默认格式,不会 500。
+  format?: string;
   created?: number;
   lastSeen?: number; // 最后一次拉订阅的时间(功能3:访问侦测)
   hits?: number;     // 累计拉取次数
-  usEnabled?: boolean; // 是否激活了 /us 隐藏链接(美国节点组,默认关闭,后台按钮/建设备时勾选开启)
 }
 
 // ---------- 设备 ----------
@@ -33,10 +36,10 @@ export async function getDevice(username: string): Promise<Device | null> {
   return r.value ? { username, ...r.value } : null;
 }
 
-export async function addDevice(username: string, id: string, note: string, format: "base64" | "singbox" | "clash" = "base64", usEnabled = false): Promise<boolean> {
+export async function addDevice(username: string, id: string, note: string, format: string = DEFAULT_FORMAT): Promise<boolean> {
   if (!username) return false;
   if ((await kv.get(["device", username])).value) return false; // 已存在
-  await kv.set(["device", username], { id, enabled: true, note, format, usEnabled, created: Date.now(), hits: 0 });
+  await kv.set(["device", username], { id, enabled: true, note, format, created: Date.now(), hits: 0 });
   return true;
 }
 
@@ -70,23 +73,6 @@ export async function getNodes(): Promise<string> {
 
 export async function getNodesUpdated(): Promise<number> {
   return (await kv.get<number>(["nodes_updated"])).value ?? 0;
-}
-
-// ---------- US 节点组(/us 隐藏链接,见 routes/subscribe.ts + nodepipe/us_archive.py) ----------
-// 跟主节点池是完全独立的另一份数据:Mac mini 那边有一份永久保留的"历史美国节点档案",
-// 按最近一次成功(subs-check 测活通过 或 TCP 探测能连上)排序取前50推到这里。
-// 不留历史版本——真正的数据源头是 Mac mini 上的 us_archive.json,这里只是镜像。
-export async function getUsNodes(): Promise<string> {
-  return (await kv.get<string>(["us_nodes"])).value ?? "";
-}
-
-export async function getUsNodesUpdated(): Promise<number> {
-  return (await kv.get<number>(["us_nodes_updated"])).value ?? 0;
-}
-
-export async function saveUsNodes(content: string): Promise<void> {
-  await kv.set(["us_nodes"], content);
-  await kv.set(["us_nodes_updated"], Date.now());
 }
 
 // 功能1:保存节点前,先把当前版本存一份历史快照(用于恢复上一版)。

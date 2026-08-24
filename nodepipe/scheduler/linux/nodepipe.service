@@ -1,0 +1,25 @@
+# Ubuntu / Linux 调度模板(systemd user unit)。
+# __PYTHON__ / __RUN_ONCE__ / __HOME__ 由 install_scheduler.py 在安装时替换。
+#
+# 安装:  python3 install_scheduler.py install
+# 卸载:  python3 install_scheduler.py uninstall
+# 查看:  systemctl --user list-timers nodepipe.timer
+#         journalctl --user -u nodepipe.service -n 100
+#
+# 用 user unit(--user)而不是系统级 unit:整套东西跑在用户主目录里,不需要 root,
+# 也就不会有"root 跑出来的文件普通用户改不了"这类权限麻烦。
+#
+# 注意:user unit 默认只在用户登录期间存活。这台机器如果是无人值守的常开小主机,
+# 需要开启 lingering 让它开机就跑(install_scheduler.py 会自动尝试):
+#     sudo loginctl enable-linger $USER
+
+[Unit]
+Description=nodepipe - 测活测速并把美国节点推送到 Deno
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=NODEPIPE_HOME=__HOME__
+ExecStart=__PYTHON__ __RUN_ONCE__
+# 一轮最多跑 45 分钟(比 run_once.py 自己的 RUN_TIMEOUT 略宽,留给它自己先优雅收尾)
+TimeoutStartSec=2700

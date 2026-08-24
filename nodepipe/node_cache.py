@@ -1,4 +1,4 @@
-#!/opt/local/bin/python3.12
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # node_cache.py — 追踪每个节点(按 type:server:port 识别)的出现历史。
 # 给"连接稳定性/寿命"这个维度用:一个节点在最近这么多轮推送里反复出现,
@@ -7,16 +7,17 @@
 # 只负责记录和查询,不做任何筛选/推送决策——select_and_push.py 调用它,
 # 拿到统计结果后自己决定怎么用(现在的用法是拼进节点名字里,当一个"|"badge)。
 
-import os
 import sqlite3
 import datetime
 
-DB_PATH = os.path.expanduser("~/nodepipe/state/node_cache.db")
+from common import STATE_DIR
+
+DB_PATH = STATE_DIR / "node_cache.db"
 
 
 def _connect():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH))
     conn.execute("""
         CREATE TABLE IF NOT EXISTS nodes (
             identity TEXT PRIMARY KEY,

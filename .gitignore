@@ -7,3 +7,5 @@ bin/config.yaml
 bin/output/
 *.log
 bin/
+__pycache__/
+*.pyc

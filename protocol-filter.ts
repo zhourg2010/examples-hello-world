@@ -39,11 +39,13 @@ export function stripDisabled(raw: string): string {
 
 export function filterAndReencode(raw: string, allowedPrefixes: string[]): string {
   const lines = decodeToLines(raw);
-  const kept = lines.filter((l) => allowedPrefixes.some((p) => l.startsWith(p)));
+  // 时间戳标记节点无条件保留:它是家人判断"这批节点是什么时候推的"的唯一线索,
+  // 不该因为某条链接的协议子集恰好不含它那个协议就被顺手过滤掉。
+  const kept = lines.filter((l) => MARKER_RE.test(l) || allowedPrefixes.some((p) => l.startsWith(p)));
   return reencode(kept);
 }
 
-// 按"订阅类型"的节点数量上限截断(default 链接 50 / 每个客户端标签链接 30,见 subscribe.ts)。
+// 按节点数量上限截断(现在所有链接共用 config.ts 里的 NODE_CAP,见 subscribe.ts)。
 // 时间戳标记节点不计入上限,也不会被截掉。
 export function capNodeCount(raw: string, limit: number): string {
   const lines = decodeToLines(raw);

@@ -9,7 +9,6 @@ import { handleAdmin } from "./routes/admin.ts";
 import { handleFallback } from "./routes/fallback.ts";
 import { handleTools } from "./routes/tools.ts";
 import { handlePush } from "./routes/push.ts";
-import { handlePushUs } from "./routes/push_us.ts";
 
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
@@ -42,11 +41,6 @@ Deno.serve(async (req: Request) => {
   // 接收本地测速推送
   if (path === "/push") {
     return await handlePush(req);
-  }
-
-  // 接收美国节点档案推送(见 nodepipe/us_archive.py)
-  if (path === "/push-us") {
-    return await handlePushUs(req);
   }
 
   // 其他:默认网页

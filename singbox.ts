@@ -174,6 +174,28 @@ export function parseNodes(input: string): Outbound[] {
   return out;
 }
 
+// sing-box 客户端配置骨架。字段按 sing-box 1.12/1.13 的 schema 写(1.11 之前的老写法多处已移除)。
+//
+// 2026-08 修掉的三个真问题(之前的版本会直接起不来或者规则完全不生效):
+//  1. DoH 服务器写了 detour:"proxy",但 outbounds 里根本没有 tag 叫 proxy 的出站
+//     (只有 select/auto/direct 和各节点名)。sing-box 校验出站引用时找不到就 FATAL,
+//     整个配置起不来。现在指向真实存在的 select。
+//  2. dns.rules 里用 domain:["geosite:cn"] / ["geosite:geolocation-!cn"]。geosite: 这个
+//     前缀语法在 1.8 就废弃、1.12 已经彻底移除;写在 domain 字段里不会报错,但会被当成
+//     一个"字面域名 geosite:cn"去精确匹配,永远匹配不上——两条规则等于完全没写,
+//     所有查询都掉到 final 上。现在换成自包含的 domain_suffix 规则,不依赖任何
+//     需要联网下载的远程 rule-set(远程 rule-set 首次下载失败会多出一个启动失败点,
+//     对"发给家人直接用"的订阅来说不划算)。
+//  3. type:"https" 的 DNS 服务器 server 写的是域名(dns.google),按 1.12 的新格式必须
+//     有 domain_resolver 才能解析它自己(1.14 起是硬性要求)。现在显式指到 local。
+const CN_DNS_SUFFIXES = [
+  "cn", "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn",
+  "baidu.com", "qq.com", "taobao.com", "tmall.com", "jd.com", "alipay.com",
+  "aliyun.com", "alicdn.com", "bilibili.com", "weibo.com", "163.com",
+  "126.com", "sohu.com", "sina.com.cn", "douyin.com", "bytedance.com",
+  "xiaomi.com", "mi.com", "huawei.com", "wechat.com", "qpic.cn", "qlogo.cn",
+];
+
 export function toSingboxJson(input: string): string {
   const nodes = parseNodes(input);
 
@@ -187,20 +209,34 @@ export function toSingboxJson(input: string): string {
 
   const config = {
     log: { level: "warn", timestamp: true },
+    // urltest 的测速结果和 selector 选中的节点存盘,客户端重启后不用从头再测一遍。
+    experimental: { cache_file: { enabled: true, store_fakeip: false } },
     dns: {
-      // sing-box 1.12+ 新版 DNS server 格式(type + server,不再用 address 里塞 scheme 前缀)。
+      // 1.12+ 的新 DNS server 格式(type + server,不再往 address 里塞 scheme 前缀)。
       servers: [
-        { type: "https", tag: "remote", server: "dns.google", "server_port": 443,"path": "/dns-query", "detour": "proxy" },
-        // 不写 detour:"direct" —— sing-box 1.12+ 里给 detour 指向一个没有特殊配置的
-        // 普通 direct 出站会被判定为"没有意义"直接报 FATAL 拒绝启动(官方几个 issue 里
-        // 都在讨论这个反直觉的校验行为)。不写 detour 本来就是默认直连,效果一样。
-        { type: "udp", tag: "local", server: "223.5.5.5" } 
+        {
+          type: "https",
+          tag: "remote",
+          server: "dns.google",
+          server_port: 443,
+          path: "/dns-query",
+          // 走代理查询,避免境外域名被本地 DNS 污染。必须指向真实存在的出站 tag。
+          detour: "select",
+          // server 是域名,需要先有人把它解析成 IP。指到 local(直连的 223.5.5.5),
+          // 不会形成"要查 dns.google 得先查 dns.google"的死循环。
+          domain_resolver: "local",
+        },
+        // 不写 detour —— sing-box 1.12+ 里把 detour 指向一个没有任何特殊配置的普通
+        // direct 出站会被判定为"没有意义"直接 FATAL 拒绝启动。不写本来就是默认直连。
+        { type: "udp", tag: "local", server: "223.5.5.5" },
       ],
-      "rules": [
-        { "domain": [ "geosite:cn" ],"server": "local" },
-        { "domain": [ "geosite:geolocation-!cn" ],"server": "remote"}
-        ],
-      final: "local",
+      rules: [
+        // 国内域名交给国内 DNS,解析快、拿得到就近 CDN。
+        { domain_suffix: CN_DNS_SUFFIXES, server: "local" },
+      ],
+      // 其余(境外域名)默认走代理里的 DoH。这跟改之前正好相反——之前 final 是 local,
+      // 加上那两条失效的 geosite 规则,实际效果是所有查询明文发给 223.5.5.5。
+      final: "remote",
       strategy: "prefer_ipv4",
     },
     inbounds: [

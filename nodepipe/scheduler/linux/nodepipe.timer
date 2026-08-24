@@ -1,0 +1,16 @@
+# 4 个定点批次:6:00 / 10:30 / 14:30 / 19:00,跟 macOS 那边保持一致。
+[Unit]
+Description=nodepipe 定时任务(6:00 / 10:30 / 14:30 / 19:00)
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+OnCalendar=*-*-* 10:30:00
+OnCalendar=*-*-* 14:30:00
+OnCalendar=*-*-* 19:00:00
+# 关机错过的批次,开机后补跑一次(macOS launchd 也是这个行为)
+Persistent=true
+# 4 台机器同时到点打上游订阅源不太礼貌,随机延后 0~120 秒错开
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

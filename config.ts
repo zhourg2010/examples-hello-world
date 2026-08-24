@@ -15,3 +15,8 @@ export const AUTH_MAX_AGE = 7776000;
 
 // 节点历史保留几份(用于"恢复上一版")
 export const NODE_HISTORY = 5;
+
+// 订阅返回给客户端的节点数量上限。Mac 端 select_and_push.py 的 MAX_NODES 已经把推上来的
+// 池子控制在这个数以内了,这里是防御性的第二道闸——上游万一推超量,客户端也不会拿到超量。
+// 所有链接(默认链接和各客户端标签链接)共用这一个上限,不再像以前那样默认 50/标签 30 分开。
+export const NODE_CAP = 100;

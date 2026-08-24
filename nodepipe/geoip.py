@@ -1,4 +1,4 @@
-#!/opt/local/bin/python3.12
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # geoip.py — 本地 GeoIP 国家判断,不依赖任何在线 API(用户明确要求:怕在线GeoIP服务不稳定)。
 #
@@ -19,21 +19,16 @@ import ipaddress
 import urllib.request
 import urllib.error
 
+from common import STATE_DIR, log as _common_log
+
 GEOIP_DB_URL = "https://github.com/sapics/ip-location-db/releases/download/latest/server-country-ipv4-num.csv"
 
-GEOIP_DB_FILE = os.path.expanduser("~/nodepipe/state/geoip/country-ipv4-num.csv")
+GEOIP_DB_FILE = str(STATE_DIR / "geoip" / "country-ipv4-num.csv")
 GEOIP_DB_MAX_AGE_DAYS = int(os.environ.get("GEOIP_DB_MAX_AGE_DAYS", "7"))
 
 
 def _log(msg):
-    logfile = os.path.expanduser("~/nodepipe/logs/geoip.log")
-    try:
-        os.makedirs(os.path.dirname(logfile), exist_ok=True)
-        with open(logfile, "a", encoding="utf-8") as f:
-            f.write(str(msg) + "\n")
-    except Exception:
-        pass
-    print(msg)
+    _common_log("geoip", msg)
 
 
 def ensure_geoip_db() -> bool:

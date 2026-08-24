@@ -4,9 +4,10 @@ import { ADMIN_PATH, AUTH_MAX_AGE } from "../config.ts";
 import { genId, isAuthed, isValidCode } from "../auth.ts";
 import {
   addDevice, deleteDevice, exportBackup, getNodeHistory, getNodes,
-  getNodesUpdated, getUsNodes, importBackup, listDevices, restorePrevNodes,
+  getNodesUpdated, importBackup, listDevices, restorePrevNodes,
   saveNodes, setDevice,
 } from "../kv.ts";
+import { DEFAULT_FORMAT, DEFAULT_FORMAT_TAGS } from "../formats.ts";
 import { sendMail } from "../mail.ts";
 import { dbEnabled, userStats } from "../db.ts";
 import { getRecentLogsForUser } from "../kv.ts";
@@ -16,13 +17,11 @@ import { computeNodeStats } from "../node-stats.ts";
 async function render(origin: string, notice = ""): Promise<Response> {
   const devices = await listDevices();
   const nodes = await getNodes();
-  const usNodes = await getUsNodes();
   return html(dashboardPage({
     devices,
     nodes,
     nodesUpdated: await getNodesUpdated(),
     nodeStats: computeNodeStats(nodes),
-    usNodeStats: computeNodeStats(usNodes),
     origin,
     hasHistory: (await getNodeHistory()).length > 0,
     notice,
@@ -63,29 +62,19 @@ export async function handleAdmin(req: Request, url: URL): Promise<Response> {
     if (action === "add") {
       let note = String(f.get("note") ?? "").trim();
       if (!note) note = Array.from({ length: 8 }, () => Math.floor(Math.random() * 10)).join("");
-      const formatRaw = String(f.get("format") ?? "base64");
-      const format = formatRaw === "singbox" ? "singbox" : formatRaw === "clash" ? "clash" : "base64";
-      const usEnabled = f.get("usenabled") === "on";
-      await addDevice(
-        String(f.get("username") ?? "").trim(),
-        genId(),
-        note,
-        format,
-        usEnabled,
-      );
+      const formatRaw = String(f.get("format") ?? DEFAULT_FORMAT);
+      const format = (DEFAULT_FORMAT_TAGS as readonly string[]).includes(formatRaw) ? formatRaw : DEFAULT_FORMAT;
+      await addDevice(String(f.get("username") ?? "").trim(), genId(), note, format);
       return redirect(ADMIN_PATH);
     }
-    if (action === "toggleus") { // /us 隐藏链接的激活开关
+    if (action === "switchformat") { // 在 formats.ts 登记的默认格式之间轮换
       const u = String(f.get("username") ?? "");
       const dev = (await listDevices()).find((d) => d.username === u);
-      if (dev) await setDevice(u, { usEnabled: !dev.usEnabled });
-      return redirect(ADMIN_PATH);
-    }
-    if (action === "switchformat") {
-      const u = String(f.get("username") ?? "");
-      const dev = (await listDevices()).find((d) => d.username === u);
-      const next = dev?.format === "base64" ? "singbox" : dev?.format === "singbox" ? "clash" : "base64";
-      if (dev) await setDevice(u, { format: next });
+      if (dev) {
+        const tags = DEFAULT_FORMAT_TAGS as readonly string[];
+        const i = tags.indexOf(dev.format ?? DEFAULT_FORMAT);
+        await setDevice(u, { format: tags[(i + 1) % tags.length] });
+      }
       return redirect(ADMIN_PATH);
     }
     if (action === "toggle") {
