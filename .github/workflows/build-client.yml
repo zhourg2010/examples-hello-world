@@ -1,0 +1,161 @@
+# 构建自定义 Clash 客户端(client/ 目录),出 macOS / Windows / Linux 三个平台的包。
+#
+# 触发方式:
+#   - 打 tag client-v*      → 构建并发一个 GitHub Release
+#   - 手动跑(workflow_dispatch)→ 只构建,产物挂在这次运行的 Artifacts 里
+#
+# 只在 client/ 有改动时才自动跑,Deno 服务那边的提交不会白白触发一轮几十分钟的构建。
+#
+# 没有做代码签名/公证 —— 自用够了,代价是:
+#   macOS    第一次打开要右键 → 打开 → 再点一次"打开"(Gatekeeper 拦未签名应用)
+#   Windows  SmartScreen 会提示,点"更多信息 → 仍要运行"
+# 想去掉这些提示需要 Apple 开发者账号($99/年)和代码签名证书,不值得。
+
+name: 构建客户端
+
+on:
+  push:
+    tags:
+      - 'client-v*'
+    branches:
+      - main
+    paths:
+      - 'client/**'
+      - '.github/workflows/build-client.yml'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: '构建完发一个 Release'
+        type: boolean
+        default: false
+
+# 同一分支上新的提交会取消还在跑的旧构建,免得排队浪费额度
+concurrency:
+  group: build-client-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # 发 Release 需要
+
+jobs:
+  build:
+    strategy:
+      # 一个平台挂掉不影响其他平台继续出包
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            label: macOS-Apple芯片
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            label: macOS-Intel
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: Windows-x64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: Linux-x64
+
+    runs-on: ${{ matrix.os }}
+    # Tauri 构建慢,给足时间;卡住的话也不至于一直占着 runner
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Rust 编译是整个构建里最慢的一步,缓存能把重复构建从几十分钟压到几分钟
+      - name: 缓存 Rust 构建产物
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: client/src-tauri -> target
+          key: ${{ matrix.target }}
+
+      # webkit2gtk 是 Tauri 在 Linux 上的 WebView 后端;
+      # libayatana-appindicator3 给托盘图标用;patchelf 给 AppImage 打包用。
+      # 这几个是从上游 release.yml 里抄的,少一个都构建不过。
+      - name: 安装 Linux 系统依赖
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxslt1.1 libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf
+
+      - name: 安装 Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: 装依赖
+        working-directory: client
+        run: pnpm i
+
+      # prebuild 按目标平台下载 mihomo 内核(sidecar)。不跑这步的话
+      # tauri 打包时会因为找不到 externalBin 里声明的 verge-mihomo 而失败。
+      - name: 下载内核 sidecar
+        working-directory: client
+        run: pnpm run prebuild ${{ matrix.target }}
+
+      - name: 构建
+        uses: tauri-apps/tauri-action@v0
+        env:
+          NODE_OPTIONS: '--max_old_space_size=4096'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: client
+          args: --target ${{ matrix.target }}
+          # 交给下面的步骤统一处理产物,不让 action 自己去发 Release
+          includeUpdaterJson: false
+
+      - name: 收集产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          # dmg/msi/deb/AppImage 各平台只会命中自己那几个,匹配不到的忽略
+          path: |
+            client/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            client/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+            client/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+            client/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            client/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+          if-no-files-found: warn
+          retention-days: 30
+
+  release:
+    # 只有打了 client-v* 的 tag,或者手动跑时勾了 release,才发布
+    if: startsWith(github.ref, 'refs/tags/client-v') || inputs.release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: 发 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('client-dev-{0}', github.run_number) }}
+          name: 自定义 Clash 客户端 ${{ github.ref_type == 'tag' && github.ref_name || format('(开发构建 #{0})', github.run_number) }}
+          body: |
+            基于 Clash Verge Rev 修改，加了「一键推送美国节点到 Deno」按钮（在代理页测延迟按钮旁边）。
+
+            **未做代码签名**，首次打开需要：
+            - macOS：右键 → 打开 → 再点一次「打开」
+            - Windows：SmartScreen 提示时点「更多信息 → 仍要运行」
+
+            macOS 请按芯片选择：Apple 芯片下 `aarch64`，Intel 下 `x86_64`。
+          draft: false
+          prerelease: ${{ github.ref_type != 'tag' }}
