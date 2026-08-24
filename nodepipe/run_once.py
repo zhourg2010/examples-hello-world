@@ -95,6 +95,16 @@ def main():
         log(f"ERROR: 找不到 {config}。先跑一次: python3 gen_config.py full")
         sys.exit(1)
 
+    # 先把服务端的免费节点池拉到本地,再起文件服务 —— 顺序反了的话这一轮
+    # subs-check 拉到的还是上一次的旧文件。
+    # 拉失败不中断:免费池是**锦上添花**,自己机场那条主链路不该被它拖累。
+    if os.environ.get("FREE_POOL", "1") != "0":
+        try:
+            import free_pool
+            free_pool.main()
+        except Exception as e:
+            log(f"WARN: 拉免费节点池失败({e}),这一轮就不测免费节点了")
+
     httpd = start_retest_server()
 
     # 把 NODEPIPE_HOME 传给子进程,回调脚本里也会用到(虽然 gen_config.py 已经把它

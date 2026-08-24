@@ -9,6 +9,9 @@ import { handleAdmin } from "./routes/admin.ts";
 import { handleFallback } from "./routes/fallback.ts";
 import { handleTools } from "./routes/tools.ts";
 import { handlePush } from "./routes/push.ts";
+import { handleFreeAdmin, handleFreePool } from "./routes/free.ts";
+import { harvestAll } from "./free/harvest.ts";
+import { freeStoreEnabled, prune } from "./free/store.ts";
 
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
@@ -43,6 +46,43 @@ Deno.serve(async (req: Request) => {
     return await handlePush(req);
   }
 
+  // 免费节点池:后台面板 + 手动抓取
+  if (path === ADMIN_PATH + "/free" || path.startsWith(ADMIN_PATH + "/free/")) {
+    return await handleFreeAdmin(req, url);
+  }
+
+  // 免费节点池:给本地实测端拉候选(PUSH_KEY 鉴权)
+  if (path === "/free/pool") {
+    return await handleFreePool(req, url);
+  }
+
   // 其他:默认网页
   return serveFile(req, "./index.html");
 });
+
+// ---------------------------------------------------------------- 定时抓取
+//
+// 免费节点池要的是**长期定期**跑,不是手工点一次就完事:这些源每天都在变,今天抓到的
+// 明天大半就死了,所以真正有用的是那条时间线 —— 一个节点连着十几轮都还在,才说明它背后
+// 的机器是长期在跑的(free_node.seen_count 记的就是这个)。手工那个按钮只是补跑用的。
+//
+// Deno.cron 是 Deno Deploy 自带的调度器,不需要外部触发器,也不需要本机开着。
+// 表达式是 UTC。6 小时一轮:免费源的更新频率大多是每天 1~2 次(Barabama 是每日 12 点),
+// 抓太勤既没有新东西,还白白给人家仓库刷流量。
+//
+// 没配 DATABASE_URL 就不注册 —— 抓了也存不住,纯属浪费。
+// Deno.cron 在 Deno Deploy 上直接可用;本机 `deno task dev` 跑的话需要 --unstable-cron,
+// 没带这个 flag 时 Deno.cron 是 undefined。本地开发不该因为这个起不来,所以先探一下。
+if (freeStoreEnabled && typeof Deno.cron === "function") {
+  Deno.cron("harvest-free-nodes", "0 */6 * * *", async () => {
+    const r = await harvestAll();
+    console.log(`[free] 定时抓取完成:入库 ${r.totalKept} 条,` +
+      r.sources.map((s) => `${s.id}=${s.ok ? s.kept : "失败"}`).join(" "));
+  });
+
+  // 每天清一次很久没再出现的节点。免费节点寿命普遍很短,不清的话表会一直涨。
+  Deno.cron("prune-free-nodes", "30 4 * * *", async () => {
+    const n = await prune();
+    if (n) console.log(`[free] 清理过期节点 ${n} 条`);
+  });
+}
