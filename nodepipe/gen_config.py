@@ -144,6 +144,13 @@ def build_config(mode: str, sub_urls: list, github_proxy: str) -> str:
         # 这里当成一个普通订阅源加进来,下一轮就会被真正拉去重测,而不只是凭旧缓存
         # 假设它还活着。
         lines.append(f'  - "http://127.0.0.1:{RETEST_PORT}/recent_history.txt"')
+        # 免费节点池。free_pool.py 会在每轮开始前把服务端抓好的候选拉下来写成这个文件,
+        # 这里同样当成一个普通订阅源加进来 —— 免费节点的活性/速度只能靠实测,
+        # 走 subs-check 这条已经在跑的路是最省事的,不用另起一套测试逻辑。
+        # 池子拉不下来(没配 PUSH_KEY、服务端还没抓过)时文件不存在,subs-check 拉不到就跳过,
+        # 不影响这一轮的其它订阅源。
+        if os.environ.get("FREE_POOL", "1") != "0":
+            lines.append(f'  - "http://127.0.0.1:{RETEST_PORT}/free_pool.txt"')
 
     lines += [
         "sub-urls-retry: 2",
