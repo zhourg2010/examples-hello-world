@@ -4,6 +4,7 @@
 
 import { ADMIN_EMAIL } from "./config.ts";
 import type { Device, DeviceHit } from "./kv.ts";
+import { iconSvg, metaOf } from "./clients.ts";
 import { appleHintOf, parseOs, parseUa } from "./ua.ts";
 import type { NodeStats } from "./node-stats.ts";
 import { ALL_PROTOS, countFor, DEFAULT_FORMAT, DEFAULT_FORMAT_TAGS, FORMATS, type FormatSpec, LISTED_FORMATS } from "./formats.ts";
@@ -71,6 +72,34 @@ const STYLE = `<style>
   .box{max-width:380px;margin:80px auto}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
   .hits{font-size:12px;color:var(--muted)}
+  /* 设备 Dock:一条横向的图标带,鼠标滚轮左右滑。图标悬停放大,点开看详情。 */
+  .dock-wrap{max-width:760px}
+  /* 注意:这里**不能**开 scroll-behavior:smooth。开了以后 scrollLeft 读回来的是动画
+     途中的旧值,下面 JS 判断"是不是已经滚到头了"就会一直判错,滚到最左还接着拦截页面
+     滚动。滚轮本来就是一小格一小格来的,不加动画反而跟手。 */
+  .dock{display:flex;gap:6px;overflow-x:auto;overflow-y:hidden;padding:6px 2px 8px;
+    scrollbar-width:thin}
+  /* 细横向滚动条,不占地方但看得见 */
+  .dock::-webkit-scrollbar{height:6px}
+  .dock::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:3px}
+  .dock::-webkit-scrollbar-track{background:transparent}
+  .dock-item{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:3px;
+    width:62px;padding:4px 2px;background:none;border:none;cursor:pointer;
+    transition:transform .14s ease;transform-origin:bottom center}
+  .dock-item:hover{transform:scale(1.18) translateY(-2px);background:none}
+  .dock-item.on{transform:scale(1.12) translateY(-2px)}
+  .dock-item.on svg rect{stroke:var(--fg);stroke-width:2}
+  .dock-name{font-size:9px;color:var(--muted);line-height:1.15;text-align:center;
+    max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dock-item.on .dock-name{color:var(--fg);font-weight:700}
+  .dock-detail:empty{display:none}
+  .dock-detail{background:var(--card);border:1.5px solid var(--bd2);padding:10px 12px;
+    font-size:11px;line-height:1.75;margin-top:2px}
+  .dock-detail h5{margin:0 0 4px;font-size:12px}
+  .dock-detail .kv{display:flex;gap:8px}
+  .dock-detail .kv b{min-width:56px;font-weight:600;color:var(--muted);flex-shrink:0}
+  .dock-detail .rawua{font-family:ui-monospace,Menlo,monospace;font-size:10px;
+    color:var(--muted);word-break:break-all}
   .hr{border-top:2px solid var(--bd);margin:20px 0}
   .qr-mask{display:none;position:fixed;inset:0;background:rgba(26,26,26,.72);align-items:center;justify-content:center;z-index:50}
   .qr-mask.show{display:flex}
@@ -190,39 +219,48 @@ function qrPayloadFor(format: string, url: string, name: string): string {
 // 只有 User-Agent + IP + 时间。所以这里认出来的是**客户端类型**,不是设备身份——
 // 两台都装了小火箭的 iPhone 在这儿长得一模一样。真要区分人/设备,靠的是每台设备一条
 // 不同的订阅链接(不同用户名+id),不是靠这个列表。
-function deviceList(hits: DeviceHit[]): string {
+function deviceList(hits: DeviceHit[], dockId: string): string {
   if (hits.length === 0) {
     return `<div style="font-size:11px;color:var(--muted);margin:4px 0 0 150px;opacity:.65">还没有客户端拉过这条链接</div>`;
   }
-  const rows = hits.slice(0, 6).map((h) => {
+
+  const items = hits.map((h, i) => {
     const info = parseUa(h.ua);
-    const name = info.known
-      ? `${escapeHtml(info.client)}${info.version ? " " + escapeHtml(info.version) : ""}`
-      : `<span style="opacity:.6">未识别的客户端</span>`;
-    // 操作系统:绝大多数代理客户端的 UA 里根本没有,抠不出来就不显示,不猜。
+    const meta = metaOf(info.client);
     const os = parseOs(h.ua, appleHintOf(info.client));
-    const meta = [info.known ? info.platform : "", os].filter(Boolean).join(" · ");
-    const metaHtml = meta ? `<span style="opacity:.6"> · ${escapeHtml(meta)}</span>` : "";
-    // 客户端主动发了硬件标识才有。只显示前 8 位够区分了,全值在 title 里。
-    const hw = h.hwid
-      ? `<span class="tag" style="font-size:9px;padding:1px 5px;flex-shrink:0"
-           title="客户端发来的硬件标识 X-HWID:${escapeHtml(h.hwid)}">#${escapeHtml(h.hwid.slice(0, 8))}</span>`
-      : "";
-    // title 里放原始 UA:认不出来的客户端也能鼠标悬停看到它到底发了什么
-    return `<div style="display:flex;align-items:center;gap:8px;font-size:11px;padding:1px 0" title="${escapeHtml(h.ua)}">
-      <span style="min-width:210px">${name}${metaHtml}</span>
-      ${hw}
-      <span style="color:var(--muted);min-width:120px">${escapeHtml(h.ip)}</span>
-      <span style="color:var(--muted)">${timeAgo(h.last)}${h.count > 1 ? ` · ${h.count} 次` : ""}</span>
-    </div>`;
+    // 详情内容一次性塞进 data 属性,点击时由前端直接读,不用再发请求
+    const detail = {
+      client: info.known ? info.client : "未识别的客户端",
+      version: info.version,
+      what: meta.what,
+      platforms: meta.platforms,
+      core: meta.core ?? "",
+      openSource: meta.openSource === true ? "开源" : meta.openSource === false ? "闭源" : "",
+      home: meta.home ?? "",
+      os,
+      ip: h.ip,
+      hwid: h.hwid,
+      count: h.count,
+      ago: timeAgo(h.last),
+      ua: h.ua,
+    };
+    const label = info.known ? info.client : "未识别";
+    return `<button type="button" class="dock-item" data-dock="${dockId}" data-i="${i}"
+        data-detail="${escapeHtml(JSON.stringify(detail))}"
+        title="${escapeHtml(label)}${info.version ? " " + escapeHtml(info.version) : ""}\n${escapeHtml(h.ua)}">
+        ${iconSvg(meta)}
+        <span class="dock-name">${escapeHtml(label)}</span>
+      </button>`;
   }).join("");
-  const more = hits.length > 6
-    ? `<div style="font-size:11px;color:var(--muted);opacity:.7">…另有 ${hits.length - 6} 个</div>`
-    : "";
-  return `<div style="margin:5px 0 0 150px;padding-left:10px;border-left:2px solid var(--bd2)">${rows}${more}</div>`;
+
+  return `<div class="dock-wrap" style="margin:6px 0 0 150px">
+      <div class="dock" id="${dockId}">${items}</div>
+      <div class="dock-detail" id="${dockId}-d"></div>
+    </div>`;
 }
 
 function linkRow(
+  dockId: string,
   spec: FormatSpec,
   url: string,
   qr: string,
@@ -245,12 +283,12 @@ function linkRow(
       <div style="font-size:11px;color:var(--muted);margin:3px 0 0 150px">
         支持:${escapeHtml(spec.clients)}${spec.note ? `<br><span style="color:var(--muted);font-style:italic">${escapeHtml(spec.note)}</span>` : ""}
       </div>
-      ${deviceList(hits)}
-      ${variants.map((v) => `<div style="display:flex;align-items:center;gap:8px;margin:5px 0 0 150px;font-size:11px">
+      ${deviceList(hits, dockId)}
+      ${variants.map((v, vi) => `<div style="display:flex;align-items:center;gap:8px;margin:5px 0 0 150px;font-size:11px">
         <span style="color:var(--fg);opacity:.75;font-weight:600;flex-shrink:0">↳ ${escapeHtml(v.spec.clients)}</span>
         <code style="font-size:10px;flex:1;overflow:auto;color:var(--muted)">${escapeHtml(v.url)}</code>
         <button type="button" class="ghost" style="padding:2px 8px;font-size:10px" onclick='copyLink(${JSON.stringify(v.url)},this)'>复制</button>
-      </div>${v.spec.note ? `<div style="font-size:11px;color:var(--muted);margin:2px 0 0 166px;font-style:italic">${escapeHtml(v.spec.note)}</div>` : ""}${deviceList(v.hits)}`).join("")}
+      </div>${v.spec.note ? `<div style="font-size:11px;color:var(--muted);margin:2px 0 0 166px;font-style:italic">${escapeHtml(v.spec.note)}</div>` : ""}${deviceList(v.hits, `${dockId}-v${vi}`)}`).join("")}
     </div>`;
 }
 
@@ -277,6 +315,7 @@ export function dashboardPage(opts: {
 
     // 不带后缀的那条链接:走设备设置的默认格式
     const defaultRow = linkRow(
+      `dock-${d.id}-default`,
       { ...defSpec, label: `${defSpec.label}(默认,不带后缀)` },
       link, qrPayloadFor(fmt, link, d.username),
       countFor(defSpec, nodeStats.byProto), nodeStats.total, [],
@@ -292,7 +331,7 @@ export function dashboardPage(opts: {
         .filter(Boolean)
         .map((vs) => ({ spec: vs, url: `${link}/${vs.tag}`, hits: hitsOf.get(vs.tag) ?? [] }));
       return linkRow(
-        spec, tagLink, qrPayloadFor(spec.tag, tagLink, `${d.username}-${spec.tag}`),
+        `dock-${d.id}-${spec.tag}`, spec, tagLink, qrPayloadFor(spec.tag, tagLink, `${d.username}-${spec.tag}`),
         countFor(spec, nodeStats.byProto), nodeStats.total, variants,
         hitsOf.get(spec.tag) ?? [],
       );
@@ -493,11 +532,75 @@ export function dashboardPage(opts: {
     const h=(location.hash||'').replace('#','');
     if(h){ const el=document.querySelector('.nav a[data-pane="'+h+'"]'); if(el) showPane(h,el); }
   })();
+  // 设备 Dock:滚轮左右滑 + 点图标看详情
+  function initDocks(){
+    document.querySelectorAll('.dock').forEach(function(dock){
+      if(dock.dataset.bound) return;
+      dock.dataset.bound = '1';
+      // 鼠标滚轮的 deltaY 转成横向滚动。只有真的还能滚的时候才拦截默认行为,
+      // 否则滚到头之后页面就不能继续往下滚了,很难受。
+      dock.addEventListener('wheel', function(e){
+        if(e.deltaX !== 0) return;              // 触控板横向手势,交给浏览器自己处理
+        var max = dock.scrollWidth - dock.clientWidth;
+        if(max <= 1) return;                     // 没有可滚的内容,别拦
+        var at = dock.scrollLeft;
+        // 滚到头了就把滚轮还给页面。留 1px 容差:scrollWidth/clientWidth 在缩放下是小数,
+        // 严格相等永远不成立,会出现"到底了还拦着"的死角。
+        if((e.deltaY < 0 && at <= 1) || (e.deltaY > 0 && at >= max - 1)) return;
+        e.preventDefault();
+        dock.scrollLeft = Math.max(0, Math.min(max, at + e.deltaY));
+      }, {passive:false});
+    });
+
+    document.querySelectorAll('.dock-item').forEach(function(btn){
+      if(btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function(){
+        var dockId = btn.dataset.dock;
+        var panel = document.getElementById(dockId + '-d');
+        var wasOn = btn.classList.contains('on');
+        // 同一条 Dock 里只亮一个
+        document.querySelectorAll('.dock-item[data-dock="'+dockId+'"]').forEach(function(b){
+          b.classList.remove('on');
+        });
+        if(wasOn){ panel.innerHTML = ''; return; }   // 再点一次收起
+        btn.classList.add('on');
+        panel.innerHTML = renderDockDetail(JSON.parse(btn.dataset.detail));
+      });
+    });
+  }
+
+  function esc(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+
+  function renderDockDetail(d){
+    function row(k, v){ return v ? '<div class="kv"><b>'+k+'</b><span>'+esc(v)+'</span></div>' : ''; }
+    var title = esc(d.client) + (d.version ? ' ' + esc(d.version) : '');
+    var tags = [d.openSource, d.core ? '内核 ' + d.core : ''].filter(Boolean).join(' · ');
+    return '<h5>' + title + (tags ? ' <span style="font-weight:400;color:var(--muted)">— ' + esc(tags) + '</span>' : '') + '</h5>'
+      + '<div style="margin-bottom:6px">' + esc(d.what) + '</div>'
+      + row('平台', d.platforms)
+      + row('系统', d.os)
+      + row('IP', d.ip)
+      + row('硬件标识', d.hwid)
+      + row('最近访问', d.ago + (d.count > 1 ? ' · 共 ' + d.count + ' 次' : ''))
+      + row('项目', d.home)
+      + '<div class="kv" style="margin-top:5px"><b>原始 UA</b><span class="rawua">' + esc(d.ua) + '</span></div>';
+  }
+
+  document.addEventListener('DOMContentLoaded', initDocks);
+
   function toggleDeviceDetail(id){
     const target = document.getElementById(id);
     const isOpen = target.style.display !== 'none';
     document.querySelectorAll('.device-detail-tr').forEach(tr=>{ tr.style.display='none'; });
     target.style.display = isOpen ? 'none' : 'table-row';
+    // 链接明细刚展开,里面的 Dock 这时才第一次可见。元素本来就在 DOM 里(初始化时
+    // 已经绑过),这里再调一次是防御性的:initDocks 自己有 dataset.bound 去重,重复调无害。
+    initDocks();
   }
   async function copyLink(text, btn){
     try{ await navigator.clipboard.writeText(text); }
