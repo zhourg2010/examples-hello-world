@@ -116,14 +116,25 @@ ui.ts / tools_ui.ts     管理后台页面
 |---|---|---|---|
 | *(不加)* | 设备默认格式 | — | 取决于所选格式 |
 | `/clash` | Clash / mihomo YAML | OpenClash、mihomo(Clash.Meta)、Clash Verge Rev、ClashX Meta、Stash、FlClash | vless / anytls / trojan / vmess / ss |
-| `/openclash` | 同上(旧链接别名) | OpenClash | 同上 |
-| `/singbox` | sing-box JSON | sing-box、SFI / SFM(iOS/macOS)、Hiddify | 同上 |
-| `/base64` | base64 标准订阅 | v2rayN、Shadowrocket、NekoBox、Hiddify 等 | 同上 |
-| `/v2box` | base64(去掉 anytls) | V2Box | vless / trojan / vmess / ss |
-| `/v2rayn` | base64(全协议,同 `/base64`) | v2rayN | vless / anytls / trojan / vmess / ss |
+| `/singbox` | sing-box JSON | sing-box、SFI / SFM(iOS/macOS)、**Karing**、Hiddify | 同上 |
+| `/base64` | base64 标准订阅 | v2rayN、Shadowrocket、NekoBox、**Karing**、Hiddify 等 | 同上 |
 | `/surge` | Surge 5 conf | Surge 5(macOS / iOS) | **仅** trojan / vmess / ss |
 | `/quanx` | QX server_local 行 | Quantumult X(iOS) | vless / anytls / trojan / vmess / ss |
 | `/loon` | Loon conf | Loon(iOS) | 同上 |
+
+后台的链接列表按**格式**列,一种格式一条。下面这三条依然有效(已经发出去的旧链接不会失效),
+只是不再单独占一行:
+
+| 后缀 | 说明 |
+|---|---|
+| `/v2box` | base64 去掉 anytls。**V2Box 必须用这条**,它不支持 anytls。后台里挂在 `/base64` 那一行下面 |
+| `/openclash` | 输出与 `/clash` 完全一致的别名 |
+| `/v2rayn` | 输出与 `/base64` 完全一致的别名 |
+
+**Karing 用哪条**:它是 sing-box 内核的客户端,虽然也能读 clash 订阅,但官方说明写的是
+"完全支持 `clash` 配置,**部分支持** `clash.meta` 配置"——我们的 clash 输出用了
+anytls / reality / client-fingerprint 这些 meta 特性,所以推荐给它 `/singbox`,
+`/base64` 也可以。
 
 **Surge 要特别注意**:Surge 本身的代理类型里就没有 vless 和 anytls,这不是转换器偷懒。
 美国节点池里 vless 通常占大头,所以 Surge 那条链接的节点数会明显少于其他格式。

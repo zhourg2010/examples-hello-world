@@ -5,7 +5,7 @@
 import { ADMIN_EMAIL } from "./config.ts";
 import type { Device } from "./kv.ts";
 import type { NodeStats } from "./node-stats.ts";
-import { ALL_PROTOS, countFor, DEFAULT_FORMAT, DEFAULT_FORMAT_TAGS, FORMATS, type FormatSpec } from "./formats.ts";
+import { ALL_PROTOS, countFor, DEFAULT_FORMAT, DEFAULT_FORMAT_TAGS, FORMATS, type FormatSpec, LISTED_FORMATS } from "./formats.ts";
 
 export function escapeHtml(s: unknown): string {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
@@ -152,12 +152,13 @@ export function noticeHtml(msg: string, good: boolean): string {
   return `<div class="notice ${good ? "good" : "bad"}">${escapeHtml(msg)}</div>`;
 }
 
-// 后台"全部链接"里要列出来的后缀。顺序就是显示顺序;openclash 是 clash 的纯别名,
-// 老链接还在用但没必要在后台再占一行,所以不列。
 // 状态页协议占比条的配色,顺序跟 ALL_PROTOS 一一对应。
 const PROTO_COLORS = ["#ec3013", "#9d5fc9", "#2f9e5b", "#d98a00", "#2d7fd3"];
 
-const LINK_TAGS = ["clash", "singbox", "base64", "surge", "quanx", "loon", "v2box", "v2rayn"];
+// 后台链接列表按**格式**列,一种格式一行(见 formats.ts 的 listed 字段)。
+// 以前是八行,其中 openclash / v2rayn 跟别的格式输出一模一样,v2box 只是 base64 的一个
+// 特例——三条纯属看着多。它们的链接依然有效(已经发出去的旧链接不会失效),只是不再
+// 单独占一行;v2box 作为 base64 的变体挂在那一行下面。
 
 function formatLabel(tag: string | undefined): string {
   return FORMATS[tag ?? ""]?.label ?? FORMATS[DEFAULT_FORMAT].label;
@@ -182,11 +183,18 @@ function qrPayloadFor(format: string, url: string, name: string): string {
 // "实际有几个节点"是按 formats.ts 里登记的协议支持表算的,跟订阅出口用的是同一张表,
 // 所以不会出现后台写 100、客户端只解析出 12 个这种对不上的情况(Surge 尤其明显:
 // 它不支持 vless/anytls,数字通常远小于其他格式)。
-function linkRow(spec: FormatSpec, url: string, qr: string, count: number, total: number): string {
+function linkRow(
+  spec: FormatSpec,
+  url: string,
+  qr: string,
+  count: number,
+  total: number,
+  variants: { spec: FormatSpec; url: string }[] = [],
+): string {
   const short = count < total
     ? `<span class="tag" style="flex-shrink:0" title="节点池共 ${total} 个,这个格式支持的协议只覆盖其中 ${count} 个">${count} / ${total} 个节点</span>`
     : `<span class="tag" style="flex-shrink:0">${count} 个节点</span>`;
-  return `<div style="padding:7px 0;border-bottom:1px solid var(--bd2)">
+  return `<div style="padding:9px 0;border-bottom:1px solid var(--bd2)">
       <div style="display:flex;align-items:center;gap:10px">
         <span style="min-width:150px;font-weight:600;font-size:12px">${escapeHtml(spec.label)}</span>
         <code style="font-size:11px;flex:1;overflow:auto;color:var(--muted)">${escapeHtml(url)}</code>
@@ -194,9 +202,14 @@ function linkRow(spec: FormatSpec, url: string, qr: string, count: number, total
         <button type="button" class="ghost" onclick='copyLink(${JSON.stringify(url)},this)'>复制</button>
         <button type="button" class="ghost" onclick='showQR(${JSON.stringify(qr)})'>二维码</button>
       </div>
-      <div style="font-size:11px;color:var(--muted);margin:2px 0 0 150px">
-        支持的客户端:${escapeHtml(spec.clients)}${spec.note ? `<br><span style="color:var(--accent)">${escapeHtml(spec.note)}</span>` : ""}
+      <div style="font-size:11px;color:var(--muted);margin:3px 0 0 150px">
+        支持:${escapeHtml(spec.clients)}${spec.note ? `<br><span style="color:var(--accent)">${escapeHtml(spec.note)}</span>` : ""}
       </div>
+      ${variants.map((v) => `<div style="display:flex;align-items:center;gap:8px;margin:5px 0 0 150px;font-size:11px">
+        <span style="color:var(--accent);font-weight:600;flex-shrink:0">↳ ${escapeHtml(v.spec.clients)}</span>
+        <code style="font-size:10px;flex:1;overflow:auto;color:var(--muted)">${escapeHtml(v.url)}</code>
+        <button type="button" class="ghost" style="padding:2px 8px;font-size:10px" onclick='copyLink(${JSON.stringify(v.url)},this)'>复制</button>
+      </div>${v.spec.note ? `<div style="font-size:11px;color:var(--muted);margin:2px 0 0 166px">${escapeHtml(v.spec.note)}</div>` : ""}`).join("")}
     </div>`;
 }
 
@@ -226,12 +239,15 @@ export function dashboardPage(opts: {
       countFor(defSpec, nodeStats.byProto), nodeStats.total,
     );
 
-    const tagRows = LINK_TAGS.map((tag) => {
-      const spec = FORMATS[tag];
-      const tagLink = `${link}/${tag}`;
+    const tagRows = LISTED_FORMATS.map((spec) => {
+      const tagLink = `${link}/${spec.tag}`;
+      const variants = (spec.variants ?? [])
+        .map((v) => FORMATS[v])
+        .filter(Boolean)
+        .map((vs) => ({ spec: vs, url: `${link}/${vs.tag}` }));
       return linkRow(
-        spec, tagLink, qrPayloadFor(tag, tagLink, `${d.username}-${tag}`),
-        countFor(spec, nodeStats.byProto), nodeStats.total,
+        spec, tagLink, qrPayloadFor(spec.tag, tagLink, `${d.username}-${spec.tag}`),
+        countFor(spec, nodeStats.byProto), nodeStats.total, variants,
       );
     }).join("");
 
@@ -254,7 +270,7 @@ export function dashboardPage(opts: {
       <tr class="device-detail-tr" id="${detailId}" style="display:none">
         <td colspan="7" style="background:var(--bg);padding:14px 20px 16px">
           <div style="margin-left:22px;border-left:3px solid var(--bd);padding-left:16px">
-            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:6px">全部链接(每种格式标注了支持它的客户端,以及这条链接实际能给到多少个节点)</div>
+            <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-weight:700;margin-bottom:6px">订阅链接(一种格式一条,标注了支持它的客户端和实际能给到多少节点)</div>
             ${defaultRow}
             ${tagRows}
           </div>
