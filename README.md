@@ -36,7 +36,9 @@ nodepipe/
   run_once.py             跑一轮完整流程(测活测速 → 回调推送)
   archive_sub.py          归档订阅源原始内容(独立小工具,跟主链路无关)
   install_scheduler.py    在当前平台装/卸载定时任务,三平台一条命令
-  clash_source.py         另一条数据源:本地 Clash Verge Rev 的节点 + 实测延迟
+  push_now.py             一键入口:从本地 Clash 挑好节点推给 Deno(不需要 subs-check)
+  install_launcher.py     在桌面生成"双击就推送"的入口,三平台各一种
+  clash_source.py         数据源:本地 Clash Verge Rev 的节点 + 实测延迟/测速/Claude
   geoip.py                本地 GeoIP 库(判断节点服务器是否真在美国)
   node_cache.py           节点出现次数统计(排序时当"稳定性"用)
   scheduler/
@@ -52,9 +54,14 @@ nodepipe/
 直接推出去,不用等下一轮测速:
 
 ```bash
-SOURCE=clash python3 select_and_push.py                    # 只按延迟筛
-SOURCE=clash CLASH_MIN_SPEED=0.5 python3 select_and_push.py  # 再加上"速度 ≥ 0.5 MB/s"
+python3 push_now.py --fast     # 只测延迟,十几秒
+python3 push_now.py --claude   # 延迟 + Claude 解锁检测
+python3 push_now.py --full     # 延迟 + 测速 + Claude,几分钟
+python3 install_launcher.py    # 在桌面生成双击入口,以后点一下就推
 ```
+
+**这条路不需要 subs-check**,也不需要定时任务——节点直接来自你 Clash 里已加载的订阅,
+好不好用在这里实测。想彻底不用 Mac 那套东西的话,用这个就够了。
 
 两条路只在"从哪儿拿候选 + 怎么判断好不好用"这一步不同,后面的美国核实、轮转选点、
 上限、三层兜底、推送全部共用同一份代码。

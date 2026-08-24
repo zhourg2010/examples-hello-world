@@ -53,6 +53,7 @@ import urllib.parse
 import urllib.request
 import urllib.error
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 from common import (
     HOME, OUTPUT_DIR, STATE_DIR, RETEST_DIR,
@@ -107,13 +108,22 @@ def country_of(name: str) -> str:
     return cc.upper()[:2]
 
 
-def has_cl(name: str) -> bool:
-    """subs-check 的 media-check 给能解锁 Claude 的节点名里加 "CL-" 标签。
+def has_cl(p) -> bool:
+    """这个节点能不能解锁 Claude。
+
+    两个来源,取决于走的是哪条数据源:
+      - SOURCE=subscheck:subs-check 的 media-check 会给能解锁的节点名加 "CL-" 标签。
+      - SOURCE=clash 且开了 CLASH_CHECK_CLAUDE:clash_source 自己实测过,结果放在
+        节点的 _claude 字段里(机场的节点名不会有 CL- 标签,只看名字的话这一维就废了)。
 
     只用来排序(能解锁的排前面),不当硬过滤——曾经把它当硬门槛,一次 media-check
-    抖动就把节点清零过一次。
+    抖动就把节点清零过一次。真想硬过滤请用 CLASH_REQUIRE_CLAUDE,那是显式选项。
     """
-    return "CL-" in name
+    if isinstance(p, str):          # 兼容只传名字的老调用
+        return "CL-" in p
+    if p.get("_claude") is not None:
+        return bool(p["_claude"])
+    return "CL-" in str(p.get("name", ""))
 
 
 # ---------------------------------------------------------------- 读写
@@ -272,70 +282,108 @@ def identity_of(p: dict) -> str:
 
 # ---------------------------------------------------------------- 美国核查
 
+# 节点名里"看起来像美国"的各种写法。只在 GEOIP_STRICT=0 的降级模式下才用得上——
+# 严格模式下判据只有 GeoIP,名字怎么写都不算数。
+US_NAME_HINTS = ("🇺🇸", "美国", "美國", "UNITED STATES", "USA")
+
+
+def looks_us(name: str) -> bool:
+    """节点名是不是**看起来**像美国。只是提示,不是判据。
+
+    机场的命名五花八门,常见的有:
+        🇺🇸 美国 洛杉矶 01      US-LA-01        United States 03
+        美国-洛杉矶-BGP         USA | Dallas    US_24(subs-check 重命名后的格式)
+    所以既认两位国家码前缀,也认国旗 emoji 和中英文国名。
+    """
+    if country_of(name) == "US":
+        return True
+    upper = name.upper()
+    return any(h in name or h in upper for h in US_NAME_HINTS)
+
+
 class UsVerifier:
-    """严格的美国节点判定。
+    """美国节点判定。**判据是 GeoIP,不是节点名。**
 
-    两层:
-      1. subs-check 自己的 iprisk 检测在节点名里打的国家标签 —— 便宜,先粗筛一遍,
-         省得对一池子不相关的节点都去做 DNS 解析。
-      2. 本地 GeoIP 库对该节点服务器的**真实 IP** 做权威核实。
+    以前这里是两层:先用节点名上的国家码前缀粗筛,过了才查 GeoIP。那个前缀是
+    subs-check 的 rename-node 加的(US_24 这种格式),所以在 subs-check 那条路上工作正常。
 
-    严格模式(默认)下,第二层查不出"US"就一律不要,包括"库里没有这个 IP 段"的情况——
-    因为"验证不了"和"验证不通过"在只要美国节点这个前提下应该同等对待。
-    唯一的例外是 GeoIP 库整个不可用,那种情况下不是丢几个节点的问题,是这一轮根本
-    没有判据,由调用方决定整体中止(见 main 里的处理)。
+    但它有个隐蔽的错位:名字前缀本来只是个"省 DNS 查询"的**优化**,却被当成了**硬门槛**。
+    一旦节点不是 subs-check 重命名过的——比如 SOURCE=clash 直接读机场订阅——最常见的
+    `🇺🇸 美国 洛杉矶 01`、`美国-洛杉矶-BGP`、`United States 03` 这几种写法全都在第一层
+    就被扔掉了(实测 8 个真实机场命名里有 3 个美国节点被误杀)。丢得还很安静,日志里
+    只会显示"标签非US N 个",看不出是误杀。
+
+    现在改成:**GeoIP 是唯一的判据**,节点名不参与任何过滤。省下来的 DNS 查询靠并发
+    解析补回来(几百个节点也就一两秒),这个优化本来就不值得拿正确性去换。
+    节点名只在两个地方还有用:
+      - GEOIP_STRICT=0 的降级模式下当唯一线索(见 looks_us)
+      - 日志里对照"名字说是美国但 GeoIP 说不是"的数量,用来发现机场标错国家
     """
 
     def __init__(self):
         self.db_ready = geoip.ensure_geoip_db()
         self.rejected_by_geoip = 0
         self.rejected_unresolvable = 0
-        self.rejected_by_tag = 0
-        self._dns_cache = {}
+        self.mislabeled = 0   # 名字说是美国、GeoIP 说不是 —— 机场标错国家的信号
+        self._ip_of = {}
 
-    def _resolve(self, server: str):
-        if server in self._dns_cache:
-            return self._dns_cache[server]
-        ip = None
-        try:
-            socket.inet_aton(server)   # 本来就是 IPv4 字面量
-            ip = server
-        except OSError:
+    def resolve_all(self, proxies: list) -> None:
+        """并发把所有节点的 server 解析成 IP。
+
+        逐个串行解析的话,一个解析不了的域名要等系统 DNS 超时(好几秒),几百个节点能拖
+        到分钟级。并发之后整体就是最慢那个的耗时。
+        """
+        servers = {str(p.get("server", "")) for p in proxies if p.get("server")}
+
+        def one(server):
             try:
-                ip = socket.gethostbyname(server)
+                socket.inet_aton(server)     # 本来就是 IPv4 字面量,不用查
+                return server, server
+            except OSError:
+                pass
+            try:
+                return server, socket.gethostbyname(server)
             except Exception:
-                ip = None
-        self._dns_cache[server] = ip
-        return ip
+                return server, None
+
+        if not servers:
+            return
+        with ThreadPoolExecutor(max_workers=min(16, len(servers))) as pool:
+            for server, ip in pool.map(one, servers):
+                self._ip_of[server] = ip
 
     def is_us(self, p: dict) -> bool:
         name = str(p.get("name", ""))
-        if country_of(name) != "US":
-            self.rejected_by_tag += 1
-            return False
 
         if not self.db_ready:
-            # 调用方应该在建 UsVerifier 之后就检查 db_ready 并中止,走不到这里。
-            # 万一走到了,宽松模式下信标签,严格模式下拒绝。
-            return not GEOIP_STRICT
+            # 调用方应该在建 UsVerifier 之后就检查 db_ready 并中止,正常走不到这里。
+            # 万一走到了:严格模式拒绝,降级模式退回看名字。
+            return looks_us(name) if not GEOIP_STRICT else False
 
-        ip = self._resolve(str(p.get("server", "")))
+        ip = self._ip_of.get(str(p.get("server", "")))
         if ip is None:
+            # 域名解析不了。严格模式下"验证不了"等同于"不算数"。
             self.rejected_unresolvable += 1
-            return not GEOIP_STRICT
+            return looks_us(name) if not GEOIP_STRICT else False
 
         real = geoip.country_of_ip(ip)
         if real == "US":
             return True
         if real is None:
-            # 库里查不到这个 IP 段。严格模式下当作"没核实成功"→ 不要。
+            # 库里没有这个 IP 段(比如是 IPv6,或者很新的段)。同样按"验证不了"处理。
             self.rejected_unresolvable += 1
-            return not GEOIP_STRICT
+            return looks_us(name) if not GEOIP_STRICT else False
+
         self.rejected_by_geoip += 1
+        if looks_us(name):
+            # 名字写着美国,GeoIP 查出来在别的国家。可能是机场标错,也可能是 CDN 中转。
+            # 不管哪种,严格模式下都不要——但值得在日志里单独点出来。
+            self.mislabeled += 1
         return False
 
     def summary(self) -> str:
-        return (f"标签非US {self.rejected_by_tag} 个 / GeoIP判定非US {self.rejected_by_geoip} 个 / "
+        extra = f",其中 {self.mislabeled} 个名字写着美国但 GeoIP 查出来不是" if self.mislabeled else ""
+        return (f"GeoIP判定非US {self.rejected_by_geoip} 个{extra} / "
                 f"无法核实(域名解析不了或库里查不到) {self.rejected_unresolvable} 个")
 
 
@@ -456,15 +504,16 @@ def sort_key(p: dict, stats: dict):
         节点背后的机器/线路更长期稳定。
     """
     name = str(p.get("name", ""))
+    cl = 0 if has_cl(p) else 1
     # 测过速就按速度排(快的在前)——带宽比延迟更能决定"看视频卡不卡"。
     speed = p.get("_speed")
     if speed is not None:
-        return (0 if has_cl(name) else 1, -float(speed), name)
+        return (cl, -float(speed), name)
     delay = p.get("_delay")
     if delay is not None:
-        return (0 if has_cl(name) else 1, int(delay), name)
+        return (cl, int(delay), name)
     appearances = stats.get(identity_of(p), {}).get("appearances", 0)
-    return (0 if has_cl(name) else 1, -appearances, name)
+    return (cl, -appearances, name)
 
 
 # ---------------------------------------------------------------- 主流程
@@ -511,8 +560,9 @@ def main():
         log("WARN: GeoIP 库不可用,已按 GEOIP_STRICT=0 降级成只信 subs-check 的国家标签。"
             "这一轮没有做独立的 IP 核实。")
 
+    verifier.resolve_all(typed)
     candidates = [p for p in typed if verifier.is_us(p)]
-    log(f"--- 测速通过 {len(typed)} 个,其中确认在美国的 {len(candidates)} 个 "
+    log(f"--- 候选 {len(typed)} 个,经 GeoIP 确认在美国的 {len(candidates)} 个 "
         f"(排除: {verifier.summary()}) ---")
 
     if not candidates:
@@ -556,7 +606,7 @@ def main():
             fresh_uris.append(uri)
             n = str(p.get("name", ""))
             appear = stability.get(identity_of(p), {}).get("appearances", 0)
-            log(f"  [{'CL' if has_cl(n) else '--'}][{p.get('type'):<6}][见过{appear:>3}次] {n}")
+            log(f"  [{'CL' if has_cl(p) else '--'}][{p.get('type'):<6}][见过{appear:>3}次] {n}")
 
     # ---- 三层兜底 ----
     cache = load_json(CACHE_FILE)
