@@ -195,30 +195,83 @@ TCP 是备选(默认 `127.0.0.1:9097` —— 注意不是常见的 9090,Clash Ve
 Windows 上命名管道走不了 Python 标准库的 HTTP,需要你在
 **设置 → Clash 内核 → 外部控制器** 里打开走 TCP;脚本连不上时会明确提示这一点。
 
+### 按速度筛:Clash 自己不产生速度数据
+
+**这一点必须说清楚。** 想按"速度 > 0.5 MB/s"筛节点的话,数据不可能从 Clash 的测试结果里读到:
+
+- **mihomo 的 REST API 里没有任何测速端点。** 逐节点能测的只有 `/proxies/{name}/delay`,
+  返回的是延迟毫秒数,没有带宽。(核对方式:mihomo 仓库 `hub/route/` 全目录搜
+  speed / bandwidth,零命中。)
+- **Clash Verge Rev 界面上那些"速度"全是连接列表的实时流量显示**,不是逐节点测速。
+  它那个测试按钮测的也是延迟。
+
+所以要按速度筛,只能自己驱动内核实测。设 `CLASH_MIN_SPEED` 就会开这一步:
+
+```bash
+SOURCE=clash CLASH_MIN_SPEED=0.5 python3 select_and_push.py
+```
+
+做法:
+
+1. 把内核切到 **global 模式**(`PATCH /configs {"mode":"global"}`)。这一步是必须的——
+   global 模式下所有流量无条件走内置的 `GLOBAL` 选择器,不受你自己那套分流规则影响。
+   否则测速地址很可能被规则判给 DIRECT,量出来的是**直连速度**,跟节点毫无关系。
+2. 逐个把 `GLOBAL` 切到待测节点,通过 mihomo 的混合端口下载一段数据,算 MB/s。
+   只统计首字节到达之后的时间,不把 TLS 握手算进带宽(握手慢由延迟那一关负责筛)。
+3. 无论成功、失败还是 Ctrl-C,`finally` 里都把 mode 和 `GLOBAL` 选择还原回测速前的样子。
+
+**代价,用之前要知道:**
+
+- 测速期间**你本机所有走 Clash 的流量都会跟着当前被测的那个节点走**。一个内核同一时刻
+  只能有一个 `GLOBAL` 选择,这没法绕开。
+- 测速天然是**串行**的,100 个节点大约 8-10 分钟。延迟测试是并发的,几秒就完事。
+
+所以测速默认**关闭**(`CLASH_MIN_SPEED=0`),只按延迟筛;要用得显式打开。
+
+两级筛的顺序是先延迟后测速:延迟是并发的,先用它把不通/太慢的刷掉,剩下的才进串行的
+测速环节。反过来会在一堆根本连不通的节点上白等几分钟。
+
 ### 相关环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `SOURCE` | `subscheck` | 设成 `clash` 走这条路 |
 | `CLASH_MAX_DELAY` | `800` | 延迟阈值(毫秒),超过的不要 |
+| `CLASH_MIN_SPEED` | `0`(关) | 测速阈值(**MB/s**)。设 `0.5` 就是"低于 0.5 MB/s 的不要" |
+| `CLASH_SPEED_URL` | Cloudflare `__down` | 测速下载地址 |
+| `CLASH_SPEED_SECONDS` | `5` | 每个节点最多测几秒 |
+| `CLASH_MIXED_PORT` | 从 `/configs` 读 | mihomo 的混合端口 |
 | `CLASH_TEST_URL` | `http://www.gstatic.com/generate_204` | 测延迟用的地址 |
 | `CLASH_TEST_TIMEOUT` | `5000` | 单个节点测延迟的超时(毫秒) |
-| `CLASH_CONCURRENCY` | `16` | 同时测几个 |
+| `CLASH_CONCURRENCY` | `16` | 测延迟时的并发 |
 | `CLASH_HOME` | 按平台自动找 | Clash Verge Rev 数据目录,装在别处时用 |
 | `CLASH_PROFILE` | `<CLASH_HOME>/clash-verge.yaml` | 直接指定含 proxies 的 YAML |
 | `CLASH_API` / `CLASH_SECRET` | 从 `config.yaml` 读 | 手动指定控制器和密钥 |
 
-排序也会跟着变:这条路上每个节点都带着刚测出来的延迟,桶内排序就用延迟
-(比"历史出现次数"更能反映当下好不好用);subs-check 那条路没有逐节点延迟,仍用出现次数。
+排序也会跟着变,优先级是:**实测速度 > 实测延迟 > 历史出现次数**。开了测速就按 MB/s
+排(带宽更能决定"看视频卡不卡"),只测延迟就按毫秒排,subs-check 那条路没有逐节点数据
+就仍用出现次数。
 
 **任何一步失败(Clash 没在跑、找不到配置、一个节点都不达标)都会中止本轮并保留 Deno 上
 一批节点**,不会推一批空的把家里的订阅清掉。
 
-### 想让它也自动跑
+### 手动跑一次的典型用法
 
-把定时任务的命令换成带 `SOURCE=clash` 的那条即可。不过要注意:这条路依赖 Clash Verge Rev
-正在运行,而且它只测**延迟**不测**带宽**,也拿不到 Claude 解锁检测(`CL-` 标签)——
-那两样是 subs-check 才有的。两条路并存、按需切换通常比二选一更合适。
+在 Clash 里把节点跑起来之后,一条命令搞定"筛 + 推":
+
+```bash
+SOURCE=clash CLASH_MIN_SPEED=0.5 python3 select_and_push.py
+```
+
+它会依次做:读节点 → 严格 GeoIP 筛美国 → 并发测延迟 → 串行测速 → 按协议轮转选点
+→ 推给 Deno。中途 Ctrl-C 会干净退出并还原内核状态,不会推半批出去。
+
+### 要不要挂成自动
+
+可以(把定时任务的命令换成上面那条),但开了测速就不太适合自动跑:它会在测速的那
+8-10 分钟里持续改变你本机的出口节点。**建议:自动化交给 subs-check,这条路留着手动用。**
+
+另外这条路拿不到 Claude 解锁检测(`CL-` 标签),那是 subs-check 的 media-check 才有的。
 
 ## 日常操作
 

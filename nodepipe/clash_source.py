@@ -41,7 +41,34 @@ Windows 上命名管道走不了 Python 标准库的 HTTP,只能用 TCP —— �
     CLASH_MAX_DELAY     延迟阈值(毫秒),默认 800。超过这个数的节点不要。
     CLASH_TEST_URL      测延迟用的 URL,默认 http://www.gstatic.com/generate_204
     CLASH_TEST_TIMEOUT  单个节点测延迟的超时(毫秒),默认 5000
-    CLASH_CONCURRENCY   同时测几个,默认 16
+    CLASH_CONCURRENCY   同时测延迟时的并发,默认 16
+    CLASH_MIN_SPEED     测速阈值(MB/s),默认 0(=不测速,只按延迟筛)。设成 0.5 就是
+                        "下载速度低于 0.5 MB/s 的不要"。开启后见下方"关于测速"。
+    CLASH_SPEED_URL     测速下载地址,默认 Cloudflare 的 __down 接口
+    CLASH_SPEED_SECONDS 每个节点最多测几秒,默认 5
+    CLASH_MIXED_PORT    mihomo 的混合端口。不设就从 API 的 /configs 读。
+
+## 关于测速:Clash 自己不产生速度数据
+
+这一点必须说清楚,免得以后有人以为是这里少读了个字段:
+
+  - **mihomo 的 REST API 里没有任何测速端点。** 逐节点能测的只有 `/proxies/{name}/delay`,
+    返回的是延迟毫秒数,没有带宽。
+  - **Clash Verge Rev 界面上那些"速度"全是连接列表的实时流量显示**,不是逐节点测速。
+    它那个测试按钮测的也是延迟。
+
+所以"速度大于 X"这个条件没法靠读 Clash 的结果拿到,只能自己驱动内核实测。做法是:
+
+  1. 把内核切到 global 模式(`PATCH /configs {"mode":"global"}`)。global 模式下所有流量
+     都走内置的 GLOBAL 选择器,不受用户自己那套分流规则影响——这一步是必须的,否则
+     测速流量可能被规则判给 DIRECT,量出来的是直连速度而不是节点速度。
+  2. 逐个把 GLOBAL 切到待测节点(`PUT /proxies/GLOBAL {"name": ...}`),
+     通过 mihomo 的混合端口下载一段数据,算 MB/s。
+  3. 无论成功失败,最后都把 GLOBAL 的选择和 mode 还原回测速前的样子。
+
+**代价:测速期间你本机所有走 Clash 的流量都会跟着走当前被测的那个节点。**
+这是没办法的事(一个内核同一时刻只能有一个 GLOBAL 选择),而且测速天然是串行的,
+100 个节点大约要 8-10 分钟。所以测速默认是**关的**,要用得显式设 CLASH_MIN_SPEED。
 """
 
 import os
@@ -64,6 +91,10 @@ def log(msg):
 APP_ID = "io.github.clash-verge-rev.clash-verge-rev"
 
 MAX_DELAY = int(os.environ.get("CLASH_MAX_DELAY", "800"))
+# 测速阈值,单位 MB/s。0 = 不测速(默认),只按延迟筛。
+MIN_SPEED = float(os.environ.get("CLASH_MIN_SPEED", "0"))
+SPEED_URL = os.environ.get("CLASH_SPEED_URL", "https://speed.cloudflare.com/__down?bytes=50000000")
+SPEED_SECONDS = float(os.environ.get("CLASH_SPEED_SECONDS", "5"))
 TEST_URL = os.environ.get("CLASH_TEST_URL", "http://www.gstatic.com/generate_204")
 TEST_TIMEOUT = int(os.environ.get("CLASH_TEST_TIMEOUT", "5000"))
 CONCURRENCY = int(os.environ.get("CLASH_CONCURRENCY", "16"))
@@ -158,7 +189,7 @@ class _UdsConnection(http.client.HTTPConnection):
 
 
 class ClashClient:
-    """极简 Clash API 客户端。只用得到 GET,所以不引第三方 HTTP 库。"""
+    """极简 Clash API 客户端。用不到第三方 HTTP 库。"""
 
     def __init__(self, info: dict):
         self.info = info
@@ -188,6 +219,31 @@ class ClashClient:
                 conn.close()
             except Exception:
                 pass
+
+    def _write(self, method: str, path: str, payload: dict, timeout: float = 10):
+        conn = self._conn(timeout)
+        try:
+            body = json.dumps(payload).encode("utf-8")
+            headers = dict(self.headers)
+            headers["Content-Type"] = "application/json"
+            headers["Content-Length"] = str(len(body))
+            conn.request(method, path, body=body, headers=headers)
+            resp = conn.getresponse()
+            data = resp.read()
+            # 切换 selector 成功时 mihomo 返回 204 No Content,PATCH /configs 也是 204。
+            if resp.status not in (200, 202, 204):
+                raise ClashSourceError(f"HTTP {resp.status} {method} {path}: {data[:200]!r}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def put(self, path: str, payload: dict, timeout: float = 10):
+        return self._write("PUT", path, payload, timeout)
+
+    def patch(self, path: str, payload: dict, timeout: float = 10):
+        return self._write("PATCH", path, payload, timeout)
 
     def describe(self) -> str:
         return (f"unix socket {self.info['uds']}" if self.mode == "uds"
@@ -277,14 +333,141 @@ def measure_delays(client: ClashClient, names: list) -> dict:
     return out
 
 
+# ---------------------------------------------------------------- 测速
+
+GLOBAL_GROUP = "GLOBAL"
+
+
+def _mixed_port(client: ClashClient) -> int:
+    """mihomo 的混合端口(HTTP+SOCKS 都在这个端口上)。测速的下载就从这里走。"""
+    override = os.environ.get("CLASH_MIXED_PORT")
+    if override:
+        return int(override)
+    try:
+        cfg = client.get("/configs", timeout=5)
+        port = int(cfg.get("mixed-port") or 0)
+    except Exception:
+        port = 0
+    if not port:
+        raise ClashSourceError(
+            "拿不到 mihomo 的混合端口(mixed-port)。用 CLASH_MIXED_PORT 手动指定,"
+            "或者确认 Clash Verge Rev 的混合端口是开着的。")
+    return port
+
+
+def _download_speed(port: int, timeout: float) -> float:
+    """通过 mihomo 的混合端口下载一段数据,返回 MB/s。下不动就返回 0。
+
+    只统计"第一个字节到达之后"的时间,不把 TLS 握手和首包等待算进带宽——
+    否则慢握手的节点会被算成慢带宽,那是两码事(握手慢由延迟那一关负责筛)。
+    """
+    import time
+    import urllib.request
+
+    proxy = f"http://127.0.0.1:{port}"
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    req = urllib.request.Request(SPEED_URL, headers={"User-Agent": "nodepipe/1.0"})
+
+    got = 0
+    started = None
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            while True:
+                chunk = resp.read(64 * 1024)
+                if not chunk:
+                    break
+                if started is None:
+                    started = time.monotonic()   # 首字节到达才开始计时
+                got += len(chunk)
+                if time.monotonic() - started >= SPEED_SECONDS:
+                    break
+    except Exception:
+        pass
+
+    if not got or started is None:
+        return 0.0
+    elapsed = max(time.monotonic() - started, 0.001)
+    return got / elapsed / 1024 / 1024
+
+
+def speed_test(client: ClashClient, candidates: list) -> dict:
+    """逐个实测下载速度,返回 {节点名: MB/s}。
+
+    必须切到 global 模式才准:用户自己那套分流规则很可能把测速地址判给 DIRECT,
+    那样量出来的是直连速度,跟节点一点关系都没有。global 模式下所有流量无条件走
+    内置的 GLOBAL 选择器,把它切到谁就测谁。
+
+    测完(哪怕中途出错或被 Ctrl-C)一定把 mode 和 GLOBAL 的选择还原回去 —— 不还原的话
+    用户的 Clash 会停在 global 模式 + 某个随机节点上,分流规则全废。
+    """
+    import time
+
+    port = _mixed_port(client)
+
+    # 记下现状,finally 里要还原
+    try:
+        cfg = client.get("/configs", timeout=5)
+        old_mode = str(cfg.get("mode") or "rule")
+    except Exception as e:
+        raise ClashSourceError(f"读不到内核当前配置: {e}")
+    try:
+        g = client.get(f"/proxies/{GLOBAL_GROUP}", timeout=5)
+        old_now = str(g.get("now") or "")
+        allowed = set(g.get("all") or [])
+    except Exception as e:
+        raise ClashSourceError(f"读不到 GLOBAL 选择器: {e}(内核版本太老?)")
+
+    names = [str(p.get("name", "")) for p in candidates if p.get("name")]
+    testable = [n for n in names if n in allowed]
+    skipped = len(names) - len(testable)
+
+    log(f"--- 开始逐个实测下载速度(阈值 {MIN_SPEED} MB/s,每个最多 {SPEED_SECONDS:.0f} 秒,"
+        f"共 {len(testable)} 个,预计 {len(testable) * (SPEED_SECONDS + 2) / 60:.1f} 分钟)---")
+    log(f"    注意:测速期间本机走 Clash 的流量会跟着当前被测节点走,测完自动还原"
+        f"(mode={old_mode},GLOBAL={old_now or '未选'})")
+    if skipped:
+        log(f"    {skipped} 个节点不在 GLOBAL 选择器里,跳过测速(通常是配置里被单独排除了)")
+
+    out = {}
+    try:
+        client.patch("/configs", {"mode": "global"})
+        for i, name in enumerate(testable, 1):
+            try:
+                client.put(f"/proxies/{GLOBAL_GROUP}", {"name": name})
+            except Exception as e:
+                log(f"    [{i}/{len(testable)}] {name}: 切换失败({e}),跳过")
+                continue
+            time.sleep(0.3)  # 给内核一点时间让切换生效,不然会量到上一个节点
+            mbps = _download_speed(port, timeout=SPEED_SECONDS + 10)
+            out[name] = mbps
+            flag = "OK " if mbps >= MIN_SPEED else "慢 "
+            log(f"    [{i}/{len(testable)}] {flag}{mbps:6.2f} MB/s  {name}")
+    finally:
+        # 还原。这一步失败要大声说出来——用户的 Clash 会卡在 global 模式上。
+        try:
+            if old_now:
+                client.put(f"/proxies/{GLOBAL_GROUP}", {"name": old_now})
+            client.patch("/configs", {"mode": old_mode})
+            log(f"--- 已还原内核状态(mode={old_mode},GLOBAL={old_now or '未变'})---")
+        except Exception as e:
+            log(f"!!! 还原内核状态失败: {e}")
+            log(f"!!! 请手动把 Clash Verge Rev 的模式改回「{old_mode}」,否则分流规则不生效!")
+
+    return out
+
+
 def filter_by_delay(candidates: list) -> list:
-    """对已经通过美国核实的候选做实测延迟筛选。
+    """对已经通过美国核实的候选做实测筛选:先延迟,再(可选)测速。
 
-    在 US 核实**之后**才测延迟,是为了少打 API:一池子几百个节点里可能只有几十个是
-    美国的,没必要对其余的也各测一次。
+    在 US 核实**之后**才测,是为了少干活:一池子几百个节点里可能只有几十个是美国的,
+    没必要对其余的也各测一遍——测速尤其贵,是串行的。
 
-    每个留下来的节点会被塞一个 `_delay` 字段,select_and_push.py 的排序会优先用它
-    (实测延迟比"历史出现次数"更能反映当下好不好用)。
+    两级筛的顺序也是有意的:延迟是并发的、几秒就测完一批,先用它把明显不通/太慢的
+    刷掉;剩下的才进串行的测速环节。反过来做的话会在一堆根本连不通的节点上白等几分钟。
+
+    留下来的节点会被塞上 `_delay`(毫秒)和 `_speed`(MB/s,没测速时不存在),
+    select_and_push.py 的排序会优先用它们。
     """
     if not candidates:
         return []
@@ -314,4 +497,31 @@ def filter_by_delay(candidates: list) -> list:
     if kept:
         log(f"    最快 {kept[0]['_delay']}ms ({kept[0].get('name')}),"
             f"最慢 {kept[-1]['_delay']}ms ({kept[-1].get('name')})")
-    return kept
+
+    # ---- 第二级:测速(默认关闭,CLASH_MIN_SPEED > 0 才开)----
+    if MIN_SPEED <= 0 or not kept:
+        return kept
+
+    speeds = speed_test(client, kept)
+    fast = []
+    slow = 0
+    untested = 0
+    for p in kept:
+        name = str(p.get("name", ""))
+        if name not in speeds:
+            untested += 1
+            continue  # 不在 GLOBAL 里或切换失败,没测成
+        mbps = speeds[name]
+        if mbps < MIN_SPEED:
+            slow += 1
+            continue
+        p["_speed"] = mbps
+        fast.append(p)
+
+    fast.sort(key=lambda p: -p["_speed"])
+    log(f"--- 测速筛选: {len(fast)} 个达标(≥{MIN_SPEED} MB/s) / {slow} 个太慢 / "
+        f"{untested} 个没测成 ---")
+    if fast:
+        log(f"    最快 {fast[0]['_speed']:.2f} MB/s ({fast[0].get('name')}),"
+            f"最慢 {fast[-1]['_speed']:.2f} MB/s ({fast[-1].get('name')})")
+    return fast

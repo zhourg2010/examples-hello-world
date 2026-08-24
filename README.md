@@ -52,11 +52,17 @@ nodepipe/
 直接推出去,不用等下一轮测速:
 
 ```bash
-SOURCE=clash python3 select_and_push.py
+SOURCE=clash python3 select_and_push.py                    # 只按延迟筛
+SOURCE=clash CLASH_MIN_SPEED=0.5 python3 select_and_push.py  # 再加上"速度 ≥ 0.5 MB/s"
 ```
 
 两条路只在"从哪儿拿候选 + 怎么判断好不好用"这一步不同,后面的美国核实、轮转选点、
-上限、三层兜底、推送全部共用同一份代码。细节见 [nodepipe/README.md](nodepipe/README.md#另一条数据源直接用本地-clash-verge-rev-的节点)。
+上限、三层兜底、推送全部共用同一份代码。
+
+⚠️ **Clash 自己不产生速度数据** —— mihomo 的 API 只有 `/delay`(延迟),没有测速端点;
+Clash Verge Rev 界面上那些"速度"是连接列表的实时流量显示,不是逐节点测速。所以按速度筛
+只能由脚本驱动内核实测(切 global 模式 → 逐个切节点下载 → 还原),串行、几分钟,
+期间本机出口节点会跟着变。默认是关的。细节见 [nodepipe/README.md](nodepipe/README.md#另一条数据源直接用本地-clash-verge-rev-的节点)。
 
 ## 三、Deno 端
 

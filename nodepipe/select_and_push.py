@@ -26,7 +26,8 @@
 
 数据源有两条路,用 SOURCE 开关切换:
   SOURCE=subscheck (默认)  读 subs-check 的测速结果 all.yaml。定时任务走的是这条。
-  SOURCE=clash             读本地 Clash Verge Rev 当前加载的节点 + 实测延迟筛选。
+  SOURCE=clash             读本地 Clash Verge Rev 当前加载的节点,实测延迟筛选;
+                           再设 CLASH_MIN_SPEED=0.5 还会逐个实测下载速度、按 MB/s 筛。
                            想把"自己在 Clash 里跑着、当下延迟达标"的节点直接推出去时用。
                            详见 clash_source.py。
 两条路只在"从哪儿拿候选节点 + 怎么判断好不好用"这一步不同,后面的美国核实、轮转选点、
@@ -447,12 +448,18 @@ def sort_key(p: dict, stats: dict):
     """桶内排序:能解锁 Claude 的优先 → 快/稳的优先 → 名字。
 
     第二档用什么衡量"快/稳",取决于数据源:
-      - SOURCE=clash 时每个节点都带着刚刚实测出来的延迟(_delay),那当然用延迟——
-        它反映的是"此时此刻好不好用",比任何历史统计都准。
+      - SOURCE=clash 且开了测速(CLASH_MIN_SPEED>0)时,每个节点带着实测下载速度
+        (_speed),优先按它排——带宽比延迟更能决定"看视频卡不卡"。
+      - SOURCE=clash 只测了延迟时,用延迟(_delay)。它反映的是"此时此刻通不通、快不快",
+        比任何历史统计都准。
       - SOURCE=subscheck 时没有逐节点的延迟数字,退回用累计出现次数:反复出现过的
         节点背后的机器/线路更长期稳定。
     """
     name = str(p.get("name", ""))
+    # 测过速就按速度排(快的在前)——带宽比延迟更能决定"看视频卡不卡"。
+    speed = p.get("_speed")
+    if speed is not None:
+        return (0 if has_cl(name) else 1, -float(speed), name)
     delay = p.get("_delay")
     if delay is not None:
         return (0 if has_cl(name) else 1, int(delay), name)
@@ -635,4 +642,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # 测速中途按 Ctrl-C 很常见(一轮要好几分钟)。clash_source 里的 finally 已经
+        # 把内核的 mode 和 GLOBAL 选择还原掉了,这里只是别再吐一屏 traceback 吓人。
+        log("")
+        log("已中断(Ctrl-C)。没有推送,Deno 上一批节点保持不变。")
+        sys.exit(130)
