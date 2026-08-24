@@ -37,6 +37,13 @@ export interface FormatSpec {
   note?: string;                  // 局限说明,后台会显示出来
   contentType: string;
   render(nodes: string): string;  // nodes 是整段 base64 的标准订阅内容
+
+  // 后台只按"格式"列链接:一种格式一行,写清楚哪些客户端能用。
+  // listed=false 的是别名或特例,不单独占一行——要么输出跟别的格式完全一致(openclash、
+  // v2rayn),要么是某个格式的特例变体(v2box),挂在 variants 里当附注显示。
+  // 它们的链接**依然有效**,已经发出去的旧链接不会失效。
+  listed?: boolean;
+  variants?: string[];            // 挂在这一行下面的变体后缀
 }
 
 // base64(标准订阅)格式:不做格式转换,只按协议筛一遍再编码回去。
@@ -55,6 +62,7 @@ export const FORMATS: Record<string, FormatSpec> = {
     label: "Clash / mihomo",
     clients: "OpenClash、mihomo(Clash.Meta)、Clash Verge Rev、ClashX Meta、Stash、FlClash",
     protocols: CLASH_LIKE,
+    listed: true,
     contentType: "text/yaml; charset=utf-8",
     render: toClashYaml,
   },
@@ -62,24 +70,32 @@ export const FORMATS: Record<string, FormatSpec> = {
   openclash: {
     tag: "openclash",
     label: "Clash / mihomo(OpenClash 别名)",
-    clients: "OpenClash(与 /clash 输出完全一致,保留是为了兼容已经发出去的旧链接)",
+    clients: "同 /clash",
     protocols: CLASH_LIKE,
+    listed: false,
     contentType: "text/yaml; charset=utf-8",
     render: toClashYaml,
   },
   singbox: {
     tag: "singbox",
     label: "sing-box",
-    clients: "sing-box(Windows/macOS/Linux/Android)、SFI / SFM(iOS、macOS)、Hiddify",
+    // Karing 是 sing-box 内核的 Flutter 客户端,虽然它也能读 clash 订阅,但它自己
+    // 说明里写的是"完全支持 clash 配置,**部分支持** clash.meta 配置"——我们的 clash
+    // 输出用了 anytls / reality / client-fingerprint 这些 meta 特性,所以给 Karing
+    // 应该推 sing-box 这条,而不是 clash。
+    clients: "sing-box(Windows/macOS/Linux/Android)、SFI / SFM(iOS、macOS)、Karing、Hiddify",
     protocols: CLASH_LIKE,
+    listed: true,
     contentType: "application/json; charset=utf-8",
     render: toSingboxJson,
   },
   base64: {
     tag: "base64",
     label: "base64 标准订阅",
-    clients: "v2rayN、Shadowrocket(小火箭)、NekoBox、Hiddify,以及绝大多数吃「标准订阅」的客户端",
+    clients: "v2rayN、Shadowrocket(小火箭)、NekoBox、Karing、Hiddify,以及绝大多数吃「标准订阅」的客户端",
     protocols: ALL_PROTOS,
+    listed: true,
+    variants: ["v2box"],
     contentType: "text/plain; charset=utf-8",
     render: base64Render(ALL_PROTOS),
   },
@@ -94,9 +110,10 @@ export const FORMATS: Record<string, FormatSpec> = {
   v2box: {
     tag: "v2box",
     label: "base64(V2Box)",
-    clients: "V2Box",
+    clients: "V2Box 专用",
     protocols: ["vless", "trojan", "vmess", "ss"],
-    note: "已摘掉 anytls——V2Box 不支持(实测确认)。想要全协议请用 /base64 或 /v2rayn。",
+    note: "V2Box 不支持 anytls(实测确认),给它的必须是这条去掉 anytls 的。别的客户端用上面那条。",
+    listed: false,
     contentType: "text/plain; charset=utf-8",
     render: base64Render(["vless", "trojan", "vmess", "ss"]),
   },
@@ -114,13 +131,14 @@ export const FORMATS: Record<string, FormatSpec> = {
   v2rayn: {
     tag: "v2rayn",
     label: "base64(v2rayN)",
-    clients: "v2rayN",
+    clients: "同 /base64",
     protocols: ALL_PROTOS,
-    note: "跟 /base64 内容一致。v2rayN 带多个内核,anytls 节点会自动走它自带的 sing-box,全协议都能用。",
+    listed: false,
     contentType: "text/plain; charset=utf-8",
     render: base64Render(ALL_PROTOS),
   },
   surge: {
+    listed: true,
     tag: "surge",
     label: "Surge 5",
     clients: "Surge 5(macOS / iOS)",
@@ -130,6 +148,7 @@ export const FORMATS: Record<string, FormatSpec> = {
     render: toSurgeConf,
   },
   quanx: {
+    listed: true,
     tag: "quanx",
     label: "Quantumult X",
     clients: "Quantumult X(iOS)",
@@ -139,6 +158,7 @@ export const FORMATS: Record<string, FormatSpec> = {
     render: toQuanXConf,
   },
   loon: {
+    listed: true,
     tag: "loon",
     label: "Loon",
     clients: "Loon(iOS)",
@@ -147,6 +167,9 @@ export const FORMATS: Record<string, FormatSpec> = {
     render: toLoonConf,
   },
 };
+
+// 后台链接列表按格式列,一种格式一行。别名(openclash / v2rayn)和特例(v2box)不单独占行。
+export const LISTED_FORMATS: FormatSpec[] = Object.values(FORMATS).filter((f) => f.listed);
 
 // 设备"默认格式"(不带后缀的那条链接)可选的取值。openclash 是纯别名,不放进选项里。
 export const DEFAULT_FORMAT_TAGS = ["clash", "singbox", "base64", "surge", "quanx", "loon"] as const;
