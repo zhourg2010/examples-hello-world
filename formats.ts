@@ -8,7 +8,9 @@
 // protocols 字段是"这个格式**实际**能表达的协议",不是"我们希望它支持的协议"。
 // 这张表是照着各客户端真实的配置语法核过的,尤其注意:
 //   - Surge 的代理类型里根本没有 vless 和 anytls,这两类节点给它只会让配置解析失败。
-//   - v2rayN / V2Box 对 anytls 的支持不稳定,所以这两个专用后缀也把 anytls 摘掉。
+//   - v2rayN **支持** anytls(2026-08 对着 2dust/v2rayN 源码核实过,见下方 v2rayn 那条的注释)。
+//     以前这里写着"支持不稳定"并把 anytls 摘掉,那是没有依据的旧说法,已经改掉。
+//   - V2Box 是闭源 App,核实不了,保守起见仍然摘掉 anytls(见下方注释)。
 //   - Quantumult X 和 Loon 都是支持 vless + anytls 的,不要跟 Surge 混为一谈。
 
 import { toSingboxJson } from "./singbox.ts";
@@ -81,23 +83,40 @@ export const FORMATS: Record<string, FormatSpec> = {
     contentType: "text/plain; charset=utf-8",
     render: base64Render(ALL_PROTOS),
   },
+  // V2Box 是闭源的 iOS/macOS App,没法像 v2rayN 那样翻源码核实它到底支不支持 anytls。
+  // 已知的只有一半:Xray-core 本身完全不支持 anytls(XTLS/Xray-core 全仓库零命中)。
+  // 但"V2Box 只用 Xray-core"这一点无从证实——v2rayN 就是同时带 Xray 和 sing-box 两个
+  // 内核的反例。所以这里**保守处理**:摘掉 anytls。
+  // 摘掉的代价是少几个节点;不摘的代价是万一它解析不了,整份订阅可能直接导入失败。
+  // 如果你实测 V2Box 能吃 anytls,把下面两处的 protocols / render 换成 ALL_PROTOS 即可。
   v2box: {
     tag: "v2box",
-    label: "base64(V2Box 专用)",
+    label: "base64(V2Box)",
     clients: "V2Box",
     protocols: ["vless", "trojan", "vmess", "ss"],
-    note: "V2Box 底层是 Xray-core,不支持 anytls,这条链接已把 anytls 节点摘掉。",
+    note: "已摘掉 anytls:V2Box 闭源,无法核实它是否支持,保守处理。实测能用的话可以去掉这个过滤。",
     contentType: "text/plain; charset=utf-8",
     render: base64Render(["vless", "trojan", "vmess", "ss"]),
   },
+  // v2rayN 是**支持** anytls 的,全协议给它就行,不要再摘 anytls 了。
+  // 核实过程(2026-08,对着 2dust/v2rayN 仓库 HEAD):
+  //   - ServiceLib/Enums/EConfigType.cs         有 Anytls = 11 这个一等公民枚举
+  //   - ServiceLib/Handler/Fmt/AnytlsFmt.cs     anytls:// 分享链接的解析/序列化实现
+  //   - ServiceLib/Handler/Fmt/FmtHandler.cs    订阅导入时按 scheme 分发到 AnytlsFmt.Resolve
+  //   - ServiceLib/Handler/ConfigHandler.cs     AddAnytlsServer() 里写死
+  //                                             CoreType = ECoreType.sing_box
+  // 最后那条是关键:Xray-core 确实完全不支持 anytls(XTLS/Xray-core 的 proxy/ 目录下
+  // 根本没有 anytls,全仓库 grep 零命中),但 v2rayN 是**按节点绑定内核**的——遇到
+  // anytls 它自动切到自带的 sing-box 内核去跑,用户那头无感。所以"v2rayN 底层是
+  // Xray 所以不支持 anytls"这个推论是错的。
   v2rayn: {
     tag: "v2rayn",
-    label: "base64(v2rayN 专用)",
+    label: "base64(v2rayN)",
     clients: "v2rayN",
-    protocols: ["vless", "trojan", "vmess", "ss"],
-    note: "v2rayN 当前版本对 anytls 支持不稳定,这条链接已把 anytls 节点摘掉。",
+    protocols: ALL_PROTOS,
+    note: "跟 /base64 内容一致。v2rayN 遇到 anytls 节点会自动切到它自带的 sing-box 内核,所以全协议都能用。",
     contentType: "text/plain; charset=utf-8",
-    render: base64Render(["vless", "trojan", "vmess", "ss"]),
+    render: base64Render(ALL_PROTOS),
   },
   surge: {
     tag: "surge",

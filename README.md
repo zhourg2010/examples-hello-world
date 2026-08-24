@@ -95,7 +95,7 @@ ui.ts / tools_ui.ts     管理后台页面
 | `/singbox` | sing-box JSON | sing-box、SFI / SFM(iOS/macOS)、Hiddify | 同上 |
 | `/base64` | base64 标准订阅 | v2rayN、Shadowrocket、NekoBox、Hiddify 等 | 同上 |
 | `/v2box` | base64(去掉 anytls) | V2Box | vless / trojan / vmess / ss |
-| `/v2rayn` | base64(去掉 anytls) | v2rayN | vless / trojan / vmess / ss |
+| `/v2rayn` | base64(全协议,同 `/base64`) | v2rayN | vless / anytls / trojan / vmess / ss |
 | `/surge` | Surge 5 conf | Surge 5(macOS / iOS) | **仅** trojan / vmess / ss |
 | `/quanx` | QX server_local 行 | Quantumult X(iOS) | vless / anytls / trojan / vmess / ss |
 | `/loon` | Loon conf | Loon(iOS) | 同上 |
@@ -104,8 +104,21 @@ ui.ts / tools_ui.ts     管理后台页面
 美国节点池里 vless 通常占大头,所以 Surge 那条链接的节点数会明显少于其他格式。
 后台的链接列表里每条都会显示"这条链接实际有几个节点 / 池子共几个",一眼能看出差距。
 
-`/v2box` 和 `/v2rayn` 摘掉 anytls 是因为这两个客户端对它的支持不稳定(V2Box 底层
-Xray-core 根本不支持)。想要全协议的 base64 就用 `/base64`。
+**关于 anytls 的两条后缀**(2026-08 重新核实过,之前的说法是错的):
+
+- **`/v2rayn` 现在给全协议。** v2rayN 是支持 anytls 的:`EConfigType.cs` 里有
+  `Anytls = 11` 一等公民枚举,`AnytlsFmt.cs` 是完整的分享链接解析实现,`FmtHandler.cs`
+  在订阅导入时按 scheme 分发给它,而 `ConfigHandler.AddAnytlsServer()` 里写死
+  `CoreType = ECoreType.sing_box`。关键就在最后这条:Xray-core 确实完全不支持 anytls
+  (`XTLS/Xray-core` 的 `proxy/` 目录下根本没有,全仓库 grep 零命中),**但 v2rayN 是按
+  节点绑定内核的**,遇到 anytls 自动切到自带的 sing-box 内核跑。所以"v2rayN 底层是 Xray
+  所以不支持 anytls"这个推论不成立。
+- **`/v2box` 仍然摘掉 anytls,但理由改成"无法核实"。** V2Box 是闭源 App,翻不了源码。
+  已知的只有一半(Xray-core 不支持 anytls),而"V2Box 只用 Xray-core"无从证实——v2rayN
+  就是同时带两个内核的反例。摘掉的代价是少几个节点,不摘的代价是万一它解析不了、整份
+  订阅导入失败。**如果你实测 V2Box 能吃 anytls,改 `formats.ts` 里那一处就行。**
+
+想要全协议的 base64 也可以直接用 `/base64`。
 
 ## 四、当前生效参数
 
@@ -192,3 +205,5 @@ Xray-core 根本不支持)。想要全协议的 base64 就用 `/base64`。
 - Surge / QX / Loon 的配置语法是照着 [Sub-Store](https://github.com/sub-store-org/Sub-Store)
   的 producer 实现核对的(那是这几种格式事实上的参考实现),但没有在真机客户端上逐个
   验证过。clash 和 sing-box 两种格式是用真实解析器实测验证过的。
+- **V2Box 是否支持 anytls 无法核实**(闭源 App),`/v2box` 保守地摘掉了 anytls。
+  详见 [KNOWN_ISSUES.md](KNOWN_ISSUES.md) 第 4 条。
