@@ -4,7 +4,7 @@
 
 import { ADMIN_EMAIL } from "./config.ts";
 import type { Device, DeviceHit } from "./kv.ts";
-import { parseUa } from "./ua.ts";
+import { appleHintOf, parseOs, parseUa } from "./ua.ts";
 import type { NodeStats } from "./node-stats.ts";
 import { ALL_PROTOS, countFor, DEFAULT_FORMAT, DEFAULT_FORMAT_TAGS, FORMATS, type FormatSpec, LISTED_FORMATS } from "./formats.ts";
 
@@ -199,10 +199,19 @@ function deviceList(hits: DeviceHit[]): string {
     const name = info.known
       ? `${escapeHtml(info.client)}${info.version ? " " + escapeHtml(info.version) : ""}`
       : `<span style="opacity:.6">未识别的客户端</span>`;
-    const plat = info.known && info.platform ? `<span style="opacity:.6"> · ${escapeHtml(info.platform)}</span>` : "";
+    // 操作系统:绝大多数代理客户端的 UA 里根本没有,抠不出来就不显示,不猜。
+    const os = parseOs(h.ua, appleHintOf(info.client));
+    const meta = [info.known ? info.platform : "", os].filter(Boolean).join(" · ");
+    const metaHtml = meta ? `<span style="opacity:.6"> · ${escapeHtml(meta)}</span>` : "";
+    // 客户端主动发了硬件标识才有。只显示前 8 位够区分了,全值在 title 里。
+    const hw = h.hwid
+      ? `<span class="tag" style="font-size:9px;padding:1px 5px;flex-shrink:0"
+           title="客户端发来的硬件标识 X-HWID:${escapeHtml(h.hwid)}">#${escapeHtml(h.hwid.slice(0, 8))}</span>`
+      : "";
     // title 里放原始 UA:认不出来的客户端也能鼠标悬停看到它到底发了什么
     return `<div style="display:flex;align-items:center;gap:8px;font-size:11px;padding:1px 0" title="${escapeHtml(h.ua)}">
-      <span style="min-width:190px">${name}${plat}</span>
+      <span style="min-width:210px">${name}${metaHtml}</span>
+      ${hw}
       <span style="color:var(--muted);min-width:120px">${escapeHtml(h.ip)}</span>
       <span style="color:var(--muted)">${timeAgo(h.last)}${h.count > 1 ? ` · ${h.count} 次` : ""}</span>
     </div>`;

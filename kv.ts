@@ -202,19 +202,29 @@ export interface LogEntry {
   // 访问的是哪条格式链接("" = 不带后缀的默认链接)。
   // 2026-08 之前的老记录没有这个字段,读出来是 undefined,UI 侧按"未知"处理。
   tag?: string;
+  // 客户端**主动**发来的硬件标识(请求头 X-HWID)。目前只见过 Karing 支持,而且是
+  // 按订阅的开关、默认关着。我们不去索取,客户端发了才记 —— 这是唯一能拿到真正
+  // 设备标识的途径,HTTP 本身没有任何字段能给出主机名或设备 ID。
+  hwid?: string;
 }
 
 const KEEP_RECENT = 100;
 
 // 原子递增 seq 并写入一条日志
-export async function appendLog(username: string, ip: string, ua: string, tag = ""): Promise<void> {
+export async function appendLog(
+  username: string,
+  ip: string,
+  ua: string,
+  tag = "",
+  hwid = "",
+): Promise<void> {
   while (true) {
     const cur = await kv.get<number>(["log_seq"]);
     const seq = (cur.value ?? 0) + 1;
     const r = await kv.atomic()
       .check(cur)
       .set(["log_seq"], seq)
-      .set(["log", seq], { username, ts: Date.now(), ip, ua, tag })
+      .set(["log", seq], { username, ts: Date.now(), ip, ua, tag, hwid })
       .commit();
     if (r.ok) break; // 冲突则重试
   }
@@ -258,6 +268,7 @@ export interface DeviceHit {
   ip: string;
   last: number;     // 最近一次访问的时间戳
   count: number;    // 在这 ~100 条缓冲里出现了几次
+  hwid: string;     // 客户端主动发的硬件标识,没有就是空串
 }
 
 export async function getRecentDevicesByTag(username: string): Promise<Map<string, DeviceHit[]>> {
@@ -265,13 +276,22 @@ export async function getRecentDevicesByTag(username: string): Promise<Map<strin
   for await (const e of kv.list<Omit<LogEntry, "seq">>({ prefix: ["log"] })) {
     if (e.value.username !== username) continue;
     const tag = e.value.tag ?? "";
-    const key = `${tag}\u0000${e.value.ua}\u0000${e.value.ip}`;
+    // 有 hwid 就按 hwid 归并 —— 它比 UA+IP 准确得多:家里的 IP 会变(拨号/移动网络),
+    // 同一台设备换了 IP 就会被算成两台;hwid 不会变。没有 hwid 才退回 UA+IP。
+    const hwid = e.value.hwid ?? "";
+    const key = hwid
+      ? `${tag}\u0000hw:${hwid}`
+      : `${tag}\u0000${e.value.ua}\u0000${e.value.ip}`;
     const prev = merged.get(key);
     if (prev) {
       prev.count++;
-      if (e.value.ts > prev.last) prev.last = e.value.ts;
+      if (e.value.ts > prev.last) {
+        prev.last = e.value.ts;
+        prev.ip = e.value.ip;   // 按 hwid 归并时 IP 可能变过,显示最新那次的
+        prev.ua = e.value.ua;
+      }
     } else {
-      merged.set(key, { tag, ua: e.value.ua, ip: e.value.ip, last: e.value.ts, count: 1 });
+      merged.set(key, { tag, ua: e.value.ua, ip: e.value.ip, last: e.value.ts, count: 1, hwid });
     }
   }
 

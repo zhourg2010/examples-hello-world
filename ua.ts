@@ -122,11 +122,77 @@ export function parseUa(raw: string): UaInfo {
   return { client: "", version: "", platform: "", known: false, raw: ua };
 }
 
+// ---------------------------------------------------------------- 操作系统
+
+// Darwin 内核版本 → Apple 系统大版本。
+// 这张表是公开常识,**不是从源码核实的**,新系统出来要补。所以 UI 上一律带 ≈ 号,
+// 并且原始 Darwin 版本会保留在 title 里 —— 映射错了也不至于误导。
+const DARWIN_TO_APPLE: Record<string, { ios: string; mac: string }> = {
+  "25": { ios: "iOS 26", mac: "macOS 26" },
+  "24": { ios: "iOS 18", mac: "macOS 15" },
+  "23": { ios: "iOS 17", mac: "macOS 14" },
+  "22": { ios: "iOS 16", mac: "macOS 13" },
+  "21": { ios: "iOS 15", mac: "macOS 12" },
+  "20": { ios: "iOS 14", mac: "macOS 11" },
+};
+
+/**
+ * 从 UA 里尽量抠出操作系统。**大多数代理客户端根本不带这个信息**,抠不出来返回空串,
+ * UI 上就什么都不显示 —— 宁可不显示,也不要猜一个出来。
+ *
+ * 能抠出来的几种情况:
+ *   - Apple 平台的客户端如果没覆盖默认 UA,URLSession 会自动追加
+ *     "CFNetwork/x Darwin/y",Darwin 版本能大致对到 iOS/macOS 版本。
+ *   - 带浏览器风格 UA 的会有 "Windows NT x.y" / "Android x" / "Mac OS X x_y_z"。
+ *
+ * appleHint 用来在 Darwin 版本相同时区分 iOS 和 macOS(它俩共用一套内核版本号),
+ * 由调用方根据识别出来的客户端给:比如小火箭只有 iOS 版,SFM 只有 macOS 版。
+ */
+export function parseOs(raw: string, appleHint?: "ios" | "mac"): string {
+  const ua = raw ?? "";
+
+  const darwin = /Darwin\/(\d+)\./.exec(ua);
+  if (darwin) {
+    const m = DARWIN_TO_APPLE[darwin[1]];
+    if (!m) return `Darwin ${darwin[1]}`; // 表里没有的新版本,如实显示内核版本
+    // 没有线索时默认按 iOS 猜 —— 会带 CFNetwork/Darwin 的多半是 iOS 上的客户端
+    return `≈ ${appleHint === "mac" ? m.mac : m.ios}`;
+  }
+
+  const win = /Windows NT ([\d.]+)/.exec(ua);
+  if (win) {
+    // Windows 10 和 11 的 NT 版本都是 10.0,UA 里区分不了,别硬猜
+    return win[1] === "10.0" ? "Windows 10/11" : `Windows NT ${win[1]}`;
+  }
+
+  const android = /Android[ /](\d+(?:\.\d+)?)/.exec(ua);
+  if (android) return `Android ${android[1]}`;
+
+  const macx = /Mac OS X (\d+)[._](\d+)/.exec(ua);
+  if (macx) return `macOS ${macx[1]}.${macx[2]}`;
+
+  if (/\bLinux\b/.test(ua)) return "Linux";
+  return "";
+}
+
 /** 给 UI 用的一行短描述,比如 "Clash Verge Rev 2.5.4 · 桌面"。认不出来就返回空串。 */
 export function describeUa(raw: string): string {
   const i = parseUa(raw);
   if (!i.known) return "";
   const parts = [i.client];
   if (i.version) parts.push(i.version);
-  return i.platform ? `${parts.join(" ")} · ${i.platform}` : parts.join(" ");
+  const os = parseOs(raw, appleHintOf(i.client));
+  const tail = [i.platform, os].filter(Boolean).join(" · ");
+  return tail ? `${parts.join(" ")} · ${tail}` : parts.join(" ");
+}
+
+/**
+ * 这个客户端只在 iOS 上有还是只在 macOS 上有 —— 用来在 Darwin 版本相同时
+ * 区分 iOS/macOS(它俩共用内核版本号)。两个平台都有的客户端返回 undefined,
+ * 让 parseOs 用它的默认猜法。
+ */
+export function appleHintOf(client: string): "ios" | "mac" | undefined {
+  if (/\(iOS\)|小火箭|Quantumult|Loon/.test(client)) return "ios";
+  if (/\(macOS\)/.test(client)) return "mac";
+  return undefined;
 }
