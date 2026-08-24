@@ -95,6 +95,12 @@ MAX_DELAY = int(os.environ.get("CLASH_MAX_DELAY", "800"))
 MIN_SPEED = float(os.environ.get("CLASH_MIN_SPEED", "0"))
 SPEED_URL = os.environ.get("CLASH_SPEED_URL", "https://speed.cloudflare.com/__down?bytes=50000000")
 SPEED_SECONDS = float(os.environ.get("CLASH_SPEED_SECONDS", "5"))
+# Claude 解锁检测。subs-check 的 media-check 会给能用 Claude 的节点名加 "CL-" 标签,
+# 不用 subs-check 就没这个信息了,所以这里自己测一遍。
+CHECK_CLAUDE = os.environ.get("CLASH_CHECK_CLAUDE", "0").strip() not in ("0", "false", "no", "")
+# 1 = 不能解锁 Claude 的节点直接不要;0 = 只作为排序优先级(跟 subs-check 那边的语义一致)
+REQUIRE_CLAUDE = os.environ.get("CLASH_REQUIRE_CLAUDE", "0").strip() not in ("0", "false", "no", "")
+CLAUDE_URL = os.environ.get("CLASH_CLAUDE_URL", "https://claude.ai/")
 TEST_URL = os.environ.get("CLASH_TEST_URL", "http://www.gstatic.com/generate_204")
 TEST_TIMEOUT = int(os.environ.get("CLASH_TEST_TIMEOUT", "5000"))
 CONCURRENCY = int(os.environ.get("CLASH_CONCURRENCY", "16"))
@@ -391,15 +397,62 @@ def _download_speed(port: int, timeout: float) -> float:
     return got / elapsed / 1024 / 1024
 
 
-def speed_test(client: ClashClient, candidates: list) -> dict:
-    """逐个实测下载速度,返回 {节点名: MB/s}。
+def _claude_ok(port: int, timeout: float) -> bool:
+    """通过 mihomo 的混合端口访问 Claude,看这个节点所在地区能不能用。
 
-    必须切到 global 模式才准:用户自己那套分流规则很可能把测速地址判给 DIRECT,
-    那样量出来的是直连速度,跟节点一点关系都没有。global 模式下所有流量无条件走
-    内置的 GLOBAL 选择器,把它切到谁就测谁。
+    等价于 subs-check 的 media-check 给节点名打 "CL-" 标签那件事——不用 subs-check 就
+    没人提供这个信息了,所以自己测。就是一次普通的 GET(跟浏览器打开页面做的事一样),
+    每个节点只发一次。
+
+    判定:地区被挡时 Cloudflare 会返回 403 / 451 或者一个明确写着不可用的页面;
+    正常时返回 200。请求本身失败(超时、连不上)一律当成不可用。
+    """
+    import urllib.request
+    import urllib.error
+
+    proxy = f"http://127.0.0.1:{port}"
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    req = urllib.request.Request(CLAUDE_URL, headers={
+        # 不带正常 UA 的话容易被当成爬虫拦掉,那就测不出真实的地区可用性了
+        "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"),
+        "Accept": "text/html,application/xhtml+xml",
+    })
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return False
+            body = resp.read(8192).decode("utf-8", "replace").lower()
+    except urllib.error.HTTPError as e:
+        return False if e.code in (403, 451, 429) else False
+    except Exception:
+        return False
+
+    # 地区被挡时页面里会有这类措辞。命中任意一条就算不可用。
+    blocked_markers = ("not available in your", "unavailable in your",
+                       "app.unavailable", "request blocked", "access denied")
+    return not any(m in body for m in blocked_markers)
+
+
+def probe_nodes(client: ClashClient, candidates: list) -> dict:
+    """在**一趟** global 模式遍历里,对每个节点做所有启用了的逐节点探测。
+
+    目前有两项,都必须"把内核切到这个节点"才能测:
+      - 下载测速(CLASH_MIN_SPEED > 0)
+      - Claude 解锁检测(CLASH_CHECK_CLAUDE=1)
+
+    合成一趟是有意的:切内核 + 等生效本身就有固定开销,两项各跑一遍等于把最贵的部分
+    做了两次。合起来之后,开了测速的情况下再加 Claude 检测几乎是免费的。
+
+    必须切 global 模式才准:用户自己那套分流规则很可能把测试地址判给 DIRECT,那样量到的
+    是直连结果,跟节点一点关系都没有。global 模式下所有流量无条件走内置的 GLOBAL
+    选择器,把它切到谁就测谁。
 
     测完(哪怕中途出错或被 Ctrl-C)一定把 mode 和 GLOBAL 的选择还原回去 —— 不还原的话
     用户的 Clash 会停在 global 模式 + 某个随机节点上,分流规则全废。
+
+    返回 {节点名: {"speed": MB/s 或 None, "claude": True/False 或 None}}
     """
     import time
 
@@ -422,12 +475,19 @@ def speed_test(client: ClashClient, candidates: list) -> dict:
     testable = [n for n in names if n in allowed]
     skipped = len(names) - len(testable)
 
-    log(f"--- 开始逐个实测下载速度(阈值 {MIN_SPEED} MB/s,每个最多 {SPEED_SECONDS:.0f} 秒,"
-        f"共 {len(testable)} 个,预计 {len(testable) * (SPEED_SECONDS + 2) / 60:.1f} 分钟)---")
-    log(f"    注意:测速期间本机走 Clash 的流量会跟着当前被测节点走,测完自动还原"
+    jobs = []
+    if MIN_SPEED > 0:
+        jobs.append(f"测速(阈值 {MIN_SPEED} MB/s,每个最多 {SPEED_SECONDS:.0f} 秒)")
+    if CHECK_CLAUDE:
+        jobs.append("Claude 解锁检测" + ("(不通过就丢弃)" if REQUIRE_CLAUDE else "(只作排序优先级)"))
+    per_node = (SPEED_SECONDS + 2 if MIN_SPEED > 0 else 0) + (3 if CHECK_CLAUDE else 0)
+
+    log(f"--- 开始逐节点探测:{' + '.join(jobs)};共 {len(testable)} 个,"
+        f"预计 {len(testable) * per_node / 60:.1f} 分钟 ---")
+    log(f"    注意:探测期间本机走 Clash 的流量会跟着当前被测节点走,测完自动还原"
         f"(mode={old_mode},GLOBAL={old_now or '未选'})")
     if skipped:
-        log(f"    {skipped} 个节点不在 GLOBAL 选择器里,跳过测速(通常是配置里被单独排除了)")
+        log(f"    {skipped} 个节点不在 GLOBAL 选择器里,跳过探测(通常是配置里被单独排除了)")
 
     out = {}
     try:
@@ -439,10 +499,17 @@ def speed_test(client: ClashClient, candidates: list) -> dict:
                 log(f"    [{i}/{len(testable)}] {name}: 切换失败({e}),跳过")
                 continue
             time.sleep(0.3)  # 给内核一点时间让切换生效,不然会量到上一个节点
-            mbps = _download_speed(port, timeout=SPEED_SECONDS + 10)
-            out[name] = mbps
-            flag = "OK " if mbps >= MIN_SPEED else "慢 "
-            log(f"    [{i}/{len(testable)}] {flag}{mbps:6.2f} MB/s  {name}")
+
+            rec = {"speed": None, "claude": None}
+            bits = []
+            if MIN_SPEED > 0:
+                rec["speed"] = _download_speed(port, timeout=SPEED_SECONDS + 10)
+                bits.append(f"{'OK ' if rec['speed'] >= MIN_SPEED else '慢 '}{rec['speed']:6.2f} MB/s")
+            if CHECK_CLAUDE:
+                rec["claude"] = _claude_ok(port, timeout=10)
+                bits.append("Claude✓" if rec["claude"] else "Claude✗")
+            out[name] = rec
+            log(f"    [{i}/{len(testable)}] {'  '.join(bits)}  {name}")
     finally:
         # 还原。这一步失败要大声说出来——用户的 Clash 会卡在 global 模式上。
         try:
@@ -498,30 +565,49 @@ def filter_by_delay(candidates: list) -> list:
         log(f"    最快 {kept[0]['_delay']}ms ({kept[0].get('name')}),"
             f"最慢 {kept[-1]['_delay']}ms ({kept[-1].get('name')})")
 
-    # ---- 第二级:测速(默认关闭,CLASH_MIN_SPEED > 0 才开)----
-    if MIN_SPEED <= 0 or not kept:
+    # ---- 第二级:逐节点探测(测速 / Claude 解锁)。两项都关就直接返回 ----
+    if not kept or (MIN_SPEED <= 0 and not CHECK_CLAUDE):
         return kept
 
-    speeds = speed_test(client, kept)
-    fast = []
+    probes = probe_nodes(client, kept)
+
+    final = []
     slow = 0
+    no_claude = 0
     untested = 0
     for p in kept:
         name = str(p.get("name", ""))
-        if name not in speeds:
+        rec = probes.get(name)
+        if rec is None:
             untested += 1
             continue  # 不在 GLOBAL 里或切换失败,没测成
-        mbps = speeds[name]
-        if mbps < MIN_SPEED:
-            slow += 1
-            continue
-        p["_speed"] = mbps
-        fast.append(p)
+        if MIN_SPEED > 0:
+            if rec["speed"] is None or rec["speed"] < MIN_SPEED:
+                slow += 1
+                continue
+            p["_speed"] = rec["speed"]
+        if CHECK_CLAUDE:
+            p["_claude"] = bool(rec["claude"])
+            if REQUIRE_CLAUDE and not rec["claude"]:
+                no_claude += 1
+                continue
+        final.append(p)
 
-    fast.sort(key=lambda p: -p["_speed"])
-    log(f"--- 测速筛选: {len(fast)} 个达标(≥{MIN_SPEED} MB/s) / {slow} 个太慢 / "
-        f"{untested} 个没测成 ---")
-    if fast:
-        log(f"    最快 {fast[0]['_speed']:.2f} MB/s ({fast[0].get('name')}),"
-            f"最慢 {fast[-1]['_speed']:.2f} MB/s ({fast[-1].get('name')})")
-    return fast
+    # 排序:能解锁 Claude 的优先 → 快的优先。跟 select_and_push 里桶内排序的口径一致。
+    final.sort(key=lambda p: (0 if p.get("_claude") else 1, -(p.get("_speed") or 0)))
+
+    parts = [f"{len(final)} 个通过"]
+    if MIN_SPEED > 0:
+        parts.append(f"{slow} 个速度不达标(<{MIN_SPEED} MB/s)")
+    if REQUIRE_CLAUDE:
+        parts.append(f"{no_claude} 个 Claude 不可用")
+    parts.append(f"{untested} 个没测成")
+    log(f"--- 逐节点探测结果: {' / '.join(parts)} ---")
+    if final and CHECK_CLAUDE:
+        n_cl = sum(1 for p in final if p.get("_claude"))
+        log(f"    其中 {n_cl} 个能解锁 Claude"
+            + ("" if REQUIRE_CLAUDE else f",{len(final) - n_cl} 个不能(保留,但排在后面)"))
+    if final and MIN_SPEED > 0:
+        log(f"    最快 {final[0].get('_speed', 0):.2f} MB/s,"
+            f"最慢 {min(p.get('_speed') or 0 for p in final):.2f} MB/s")
+    return final

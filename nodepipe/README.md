@@ -159,6 +159,56 @@ server-country 库(PDDL 协议,不用注册/不用 key),默认每 7 天自动刷
 | 数量 | vless 桶 30 + other 桶 30,再砍到 50 | 按协议轮转,上限 100 |
 | `/us` 独立链路 | `us_archive.py` + `/push-us` + 隐藏的 `/us` 链接 | 整条删掉(主池本来就全是美国节点了) |
 
+## 独立用法:只用 Clash Verge Rev,不要 subs-check
+
+这条路是自成一体的——**不需要 subs-check,不需要定时任务,不需要 Mac 那套东西**。
+节点直接来自你 Clash Verge Rev 里已经加载的订阅,好不好用也在这里实测。
+
+```bash
+cp env.example ~/nodepipe/env     # 只需填 PUSH_URL 和 PUSH_KEY,SUB_URL 留空
+python3 push_now.py --fast        # 跑一次试试
+python3 install_launcher.py       # 在桌面生成双击入口
+```
+
+`install_launcher.py` 会在桌面放三个文件(macOS 是 `.command`,Linux 是 `.desktop`,
+Windows 是 `.bat`),双击就跑:
+
+| 入口 | 做什么 | 大概多久 |
+|---|---|---|
+| 推送节点-快速 | 只测延迟 | 十几秒 |
+| 推送节点-含Claude检测 | 延迟 + Claude 解锁检测 | 一分钟左右 |
+| 推送节点-完整 | 延迟 + 测速 + Claude 解锁检测 | 几分钟,期间本机出口节点会变 |
+
+对应的命令行是 `push_now.py --fast` / `--claude` / `--full`。
+
+### Claude 解锁检测
+
+subs-check 的 media-check 会给能用 Claude 的节点名加 `CL-` 标签,不用 subs-check 就
+没这个信息了(机场自己的节点名当然不会有),所以这里自己测:通过 mihomo 的混合端口
+访问一次 Claude,看这个节点所在地区通不通。每个节点一次普通 GET,跟浏览器打开页面
+做的事一样。
+
+- `CLASH_CHECK_CLAUDE=1` 打开检测,结果只作**排序优先级**(能解锁的排前面),跟
+  subs-check 那边 `CL-` 标签的语义一致。
+- `CLASH_REQUIRE_CLAUDE=1` 才是硬过滤(不能解锁的直接丢)。默认不开——曾经把这类
+  标签当硬门槛,一次抖动就把节点清零过。
+
+它和测速**共用同一趟 global 模式遍历**:切内核 + 等生效本身有固定开销,两项各跑一遍
+等于把最贵的部分做了两次。所以已经开了测速的话,再加 Claude 检测几乎是免费的。
+
+### 美国判定不依赖节点名
+
+这条路上节点名是机场给的(`🇺🇸 美国 洛杉矶 01`、`美国-洛杉矶-BGP`、`United States 03`
+……),没有 subs-check 的 `US_24` 前缀。所以 **GeoIP 是唯一的判据,节点名不参与任何过滤**。
+
+早期版本这里是错的:名字前缀本来只是个"省 DNS 查询"的优化,却被当成了硬门槛,结果
+上面那三种最常见的写法全在第一层就被扔掉了(实测 8 个真实机场命名里 3 个美国节点被
+误杀,而且日志只显示"标签非US N 个",看不出是误杀)。现在改成并发解析所有节点的 IP
+再交给 GeoIP 判,几百个节点也就一两秒。
+
+节点名现在只在两处还有用:`GEOIP_STRICT=0` 降级模式下当唯一线索;以及日志里对照
+"名字说是美国但 GeoIP 说不是"的数量——那是机场标错国家的信号。
+
 ## 另一条数据源:直接用本地 Clash Verge Rev 的节点
 
 平时定时任务走的是 subs-check。但你也可以把**本地 Clash Verge Rev 里当下实测延迟达标**的
@@ -238,6 +288,9 @@ SOURCE=clash CLASH_MIN_SPEED=0.5 python3 select_and_push.py
 | `SOURCE` | `subscheck` | 设成 `clash` 走这条路 |
 | `CLASH_MAX_DELAY` | `800` | 延迟阈值(毫秒),超过的不要 |
 | `CLASH_MIN_SPEED` | `0`(关) | 测速阈值(**MB/s**)。设 `0.5` 就是"低于 0.5 MB/s 的不要" |
+| `CLASH_CHECK_CLAUDE` | `0`(关) | 打开 Claude 解锁检测,结果作排序优先级 |
+| `CLASH_REQUIRE_CLAUDE` | `0`(关) | 硬过滤:不能解锁 Claude 的节点直接丢弃 |
+| `CLASH_CLAUDE_URL` | `https://claude.ai/` | 解锁检测访问的地址 |
 | `CLASH_SPEED_URL` | Cloudflare `__down` | 测速下载地址 |
 | `CLASH_SPEED_SECONDS` | `5` | 每个节点最多测几秒 |
 | `CLASH_MIXED_PORT` | 从 `/configs` 读 | mihomo 的混合端口 |
