@@ -71,7 +71,25 @@ Clash Verge Rev 界面上那些"速度"是连接列表的实时流量显示,不�
 只能由脚本驱动内核实测(切 global 模式 → 逐个切节点下载 → 还原),串行、几分钟,
 期间本机出口节点会跟着变。默认是关的。细节见 [nodepipe/README.md](nodepipe/README.md#另一条数据源直接用本地-clash-verge-rev-的节点)。
 
-## 三、Deno 端
+## 三、自定义客户端(`client/`)
+
+`client/` 是 [Clash Verge Rev](https://github.com/clash-verge-rev/clash-verge-rev) v2.5.4 的源码
+副本,加了一个**「一键推送美国节点到 Deno」按钮**,位置就在代理页测延迟按钮旁边。
+
+用法:先点测延迟 → 再点上传图标(第一次会弹设置,填 `/push` 地址和 `PUSH_KEY`;之后单击
+即推,右键改设置)。**有了它就不再需要本地端那套 subs-check 流程**——测速、筛选、推送
+全在客户端里完成,换电脑只要装这个包。
+
+改动刻意做得很薄:**只碰了上游 1 个文件共 5 行**,其余全是新增文件,方便以后同步上游。
+来源、改动清单、同步上游的做法、构建方式都写在 [client/MODIFICATIONS.md](client/MODIFICATIONS.md)。
+
+> 该目录沿用上游的 **GPL-3.0-only** 许可证(见 `client/LICENSE`)。它与本仓库其余部分
+> (Deno 订阅服务)是同一仓库中相互独立的程序,属于聚合关系,不影响其余部分的许可。
+
+打 `client-v*` 的 tag 会由 `.github/workflows/build-client.yml` 自动构建
+macOS(Apple 芯片 / Intel)、Windows、Linux 四个包并发 Release。
+
+## 四、Deno 端
 
 ```
 main.ts                 路由分派
@@ -128,7 +146,7 @@ ui.ts / tools_ui.ts     管理后台页面
 
 想要全协议的 base64 也可以直接用 `/base64`。
 
-## 四、当前生效参数
+## 五、当前生效参数
 
 | 参数 | 值 | 说明 |
 |---|---|---|
@@ -148,7 +166,7 @@ ui.ts / tools_ui.ts     管理后台页面
 数量上限,也不会被截断——它的作用只是让家人在客户端节点列表末尾一眼看出这批节点是
 什么时候推的。Surge / QX / Loon 这三种格式表达不了这么个假节点,改成写在文件头的注释里。
 
-## 五、2026-08 这次大改动了什么
+## 六、2026-08 这次大改动了什么
 
 **本地端**
 - 从"只能在 macOS 上跑"改成 macOS / Ubuntu / Windows 通用。写死的
@@ -171,7 +189,7 @@ ui.ts / tools_ui.ts     管理后台页面
   `usEnabled` 开关、`us_archive.py`)——主池现在本来就全是美国节点,这条是纯重复。
 - 修好 sing-box 配置的三个问题,详见下节。
 
-## 六、sing-box 配置修了什么
+## 七、sing-box 配置修了什么
 
 用 sing-box 1.13.0 官方二进制实测验证过。
 
@@ -202,7 +220,7 @@ ui.ts / tools_ui.ts     管理后台页面
 顺带开了 `experimental.cache_file`,urltest 的测速结果和 selector 选中的节点会存盘,
 客户端重启后不用从头再测一遍。
 
-## 七、已知限制
+## 八、已知限制
 
 - 归档池里的节点被当"应急下限"推送时**没有在当次重新验证**,只是最后已知可用的 URI。
   批次标签里会带 `⚠含归档节点`。
