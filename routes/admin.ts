@@ -4,8 +4,8 @@ import { ADMIN_PATH, AUTH_MAX_AGE } from "../config.ts";
 import { genId, isAuthed, isValidCode } from "../auth.ts";
 import {
   addDevice, deleteDevice, exportBackup, getNodeHistory, getNodes,
-  getNodesUpdated, importBackup, listDevices, restorePrevNodes,
-  saveNodes, setDevice,
+  getNodesUpdated, getRecentDevicesByTag, importBackup, listDevices,
+  restorePrevNodes, saveNodes, setDevice,
 } from "../kv.ts";
 import { DEFAULT_FORMAT, DEFAULT_FORMAT_TAGS } from "../formats.ts";
 import { sendMail } from "../mail.ts";
@@ -17,11 +17,21 @@ import { computeNodeStats } from "../node-stats.ts";
 async function render(origin: string, notice = ""): Promise<Response> {
   const devices = await listDevices();
   const nodes = await getNodes();
+  // 每台设备各条链接的"最近在用的客户端"。只扫 KV 缓冲(~100条),不查 Neon——
+  // 后台首页每次渲染都会走这里,不该为此挂一次跨网络的 SQL。
+  const devicesByTag = new Map(
+    await Promise.all(
+      devices.map(async (d) =>
+        [d.username, await getRecentDevicesByTag(d.username)] as const
+      ),
+    ),
+  );
   return html(dashboardPage({
     devices,
     nodes,
     nodesUpdated: await getNodesUpdated(),
     nodeStats: computeNodeStats(nodes),
+    devicesByTag,
     origin,
     hasHistory: (await getNodeHistory()).length > 0,
     notice,

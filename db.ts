@@ -21,6 +21,9 @@ async function ensureTable(): Promise<void> {
     ip TEXT,
     ua TEXT
   )`;
+  // tag 是 2026-08 加的(记录访问的是哪条格式链接)。已经建好的表用 ADD COLUMN 补上,
+  // IF NOT EXISTS 保证重复执行无害;老数据这一列是 NULL,查询侧当"未知"处理。
+  await sql`ALTER TABLE access_log ADD COLUMN IF NOT EXISTS tag TEXT`;
   await sql`CREATE INDEX IF NOT EXISTS idx_access_user_ts ON access_log (username, ts DESC)`;
   tableReady = true;
 }
@@ -41,8 +44,8 @@ export async function maybeFlush(): Promise<void> {
   // 批量插入,主键(seq)冲突忽略 → 幂等,重复刷入无害
   await sql.transaction(
     pending.map((p: LogEntry) =>
-      sql`INSERT INTO access_log (seq, username, ts, ip, ua)
-          VALUES (${p.seq}, ${p.username}, to_timestamp(${p.ts / 1000}), ${p.ip}, ${p.ua})
+      sql`INSERT INTO access_log (seq, username, ts, ip, ua, tag)
+          VALUES (${p.seq}, ${p.username}, to_timestamp(${p.ts / 1000}), ${p.ip}, ${p.ua}, ${p.tag ?? ""})
           ON CONFLICT (seq) DO NOTHING`
     ),
   );
