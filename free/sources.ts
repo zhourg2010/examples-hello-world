@@ -134,8 +134,13 @@ export const SOURCES: Source[] = [
     url: "https://nodes.udptoos.com/subscriptions/clash.yaml",
     kind: "clash",
     enabled: true,
+    // 地址是用户确认过的(他那边能打开)。这里仍标 false,因为 verified 说的是**我实际抓到
+    // 并解析成功过**——开发沙箱的出网策略只放行 raw.githubusercontent.com 一类的域名,
+    // 这个域名一直是 CONNECT 403,所以它返回的**内容长什么样**我没见过,不知道解析器认不认。
+    // 地址对不对和格式认不认是两件事,不能因为前者成立就把后者也标成验证过。
     verified: false,
-    note: "沙箱出网策略挡住了(CONNECT 403),没跑通过真实响应。部署后第一轮看计数即可。",
+    note: "地址已由用户确认可用;沙箱出网被挡,没见过真实响应,格式是否能解析未知。" +
+      "部署后第一轮看面板:出 0 条会红着报错(不会绿着显示 0),照着错误信息调即可。",
   },
   {
     id: "v2cross",

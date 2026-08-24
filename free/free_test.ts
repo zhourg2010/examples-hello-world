@@ -11,6 +11,8 @@ import { credentialId, endpointId, isJunk } from "./identity.ts";
 import { normalizeType, toUri } from "./uri.ts";
 import { FREE_PREFIX, isFreeName, withFreePrefix } from "./naming.ts";
 import { parseNodes } from "../singbox.ts";
+import { SOURCES } from "./sources.ts";
+import { harvestAll } from "./harvest.ts";
 
 function assertEq(got: unknown, want: unknown, msg: string) {
   if (got !== want) throw new Error(`${msg}\n  期望: ${want}\n  实际: ${got}`);
@@ -207,4 +209,51 @@ Deno.test("FREE 前缀能穿过 URI 往返(名字在客户端里看得到)", () 
   const back = parseNodes(toUri(p));
   assertEq(back[0].tag, `${FREE_PREFIX} | 洛杉矶 01`, "前缀跟着节点走到解析后");
   assertEq(isFreeName(back[0].tag), true, "还认得出是免费节点");
+});
+
+// ---------------------------------------------------------------- 源坏掉时要红着报错
+
+// 免费源最常见的坏法不是 404,而是 200 返回一个 HTML 页面(Cloudflare 校验 / 登录墙 /
+// 把 404 当 200 发)。这种响应喂给解析器只得到"0 个节点",跟"这个源今天没货"长得一样。
+// 一个源坏了几个月都没人发现,比它坏掉本身更糟,所以这几种情况必须判成失败。
+Deno.test("源返回 HTML 或解析不出节点时,必须判失败而不是绿着显示 0", async () => {
+  const bodies: Record<string, [string, string]> = {
+    "/cf": ["text/html", "<!DOCTYPE html><html><head><title>Just a moment...</title></head><body>x</body></html>"],
+    "/login": ["text/html", "<html><head></head><body>请先登录</body></html>"],
+    "/notfound": ["text/plain", "404: Not Found"],
+    "/nonodes": ["text/yaml", "mixed-port: 7890\nmode: rule\n"],
+    "/good": ["text/yaml", "proxies:\n  - name: A\n    type: trojan\n    server: a.example.com\n    port: 443\n    password: pw\n"],
+  };
+  const srv = Deno.serve({ port: 0, onListen() {} }, (req) => {
+    const [ct, body] = bodies[new URL(req.url).pathname] ?? ["text/plain", ""];
+    return new Response(body, { headers: { "content-type": ct } });
+  });
+  const port = (srv.addr as Deno.NetAddr).port;
+  try {
+    // 直接替换源表(SOURCES 是可变数组,测试里换掉再跑一轮)
+    const saved = SOURCES.splice(0, SOURCES.length);
+    for (const path of Object.keys(bodies)) {
+      SOURCES.push({
+        id: path.slice(1), label: path, url: `http://127.0.0.1:${port}${path}`,
+        kind: "clash", enabled: true, verified: false, note: "",
+      });
+    }
+    try {
+      const r = await harvestAll();
+      const by = (id: string) => r.sources.find((s) => s.id === id)!;
+      assertEq(by("cf").ok, false, "Cloudflare 校验页应判失败");
+      assertEq(by("cf").err.includes("HTML"), true, "错误信息要点明是 HTML");
+      assertEq(by("login").ok, false, "登录墙应判失败");
+      assertEq(by("notfound").ok, false, "404 当 200 发应判失败");
+      assertEq(by("nonodes").ok, false, "解析不出节点应判失败");
+      assertEq(by("nonodes").err.includes("格式可能变了"), true, "错误信息要指向格式");
+      // 好的那个不能被误伤
+      assertEq(by("good").ok, true, "正常源仍应成功");
+      assertEq(by("good").parsed, 1, "正常源解析出 1 个");
+    } finally {
+      SOURCES.splice(0, SOURCES.length, ...saved);
+    }
+  } finally {
+    await srv.shutdown();
+  }
 });

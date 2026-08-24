@@ -69,7 +69,15 @@ async function fetchText(url: string): Promise<string> {
     if (buf.byteLength > MAX_BYTES) {
       throw new Error(`响应 ${(buf.byteLength / 1048576).toFixed(1)}MB,超过 ${MAX_BYTES / 1048576}MB 上限`);
     }
-    return new TextDecoder().decode(buf);
+    const text = new TextDecoder().decode(buf);
+    // 非 GitHub 的源最常见的坏法不是 404,而是**200 返回一个 HTML 页面**:Cloudflare 的
+    // 人机校验、登录墙、或者把 404 页面当 200 发。这种响应喂给解析器只会得到"0 个节点",
+    // 看起来跟"这个源今天没货"一模一样。这里提前认出来,报一个说得清的错。
+    const head = text.slice(0, 400).trimStart().toLowerCase();
+    if (head.startsWith("<!doctype html") || head.startsWith("<html") || head.includes("<head>")) {
+      throw new Error("拿到的是 HTML 页面而不是节点文件(可能是登录墙 / Cloudflare 校验 / 404 当 200 发)");
+    }
+    return text;
   } finally {
     clearTimeout(timer);
   }
@@ -173,6 +181,12 @@ async function harvestOne(src: Source): Promise<{ report: SourceReport; nodes: F
     }
 
     report.parsed = raw.length;
+    // 抓到了内容却一个节点都没解析出来,几乎一定是这个源的格式变了(或者 pick 正则/kind
+    // 配错了),而不是"今天恰好没货"。判成失败,面板上才会红着提醒;否则它会绿着显示 0,
+    // 跟正常但空的源长得一样,坏了几个月都不会有人发现。
+    if (raw.length === 0) {
+      throw new Error(`抓到了内容,但一个节点都没解析出来 —— 这个源的格式可能变了(kind=${src.kind})`);
+    }
 
     const seen = new Set<string>();
     for (const p of raw) {
