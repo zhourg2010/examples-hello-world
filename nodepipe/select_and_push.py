@@ -24,8 +24,17 @@
 保留没变的:三振出局历史 + 重测通道、last_good 缓存兜底、归档垫底、MIN_KEEP 安全阀、
 末尾追加时间戳标记节点。
 
+数据源有两条路,用 SOURCE 开关切换:
+  SOURCE=subscheck (默认)  读 subs-check 的测速结果 all.yaml。定时任务走的是这条。
+  SOURCE=clash             读本地 Clash Verge Rev 当前加载的节点 + 实测延迟筛选。
+                           想把"自己在 Clash 里跑着、当下延迟达标"的节点直接推出去时用。
+                           详见 clash_source.py。
+两条路只在"从哪儿拿候选节点 + 怎么判断好不好用"这一步不同,后面的美国核实、轮转选点、
+上限、三层兜底、推送全部共用同一份代码。
+
 环境变量(由 common.load_env() 从 nodepipe/env 读入,也可以直接在命令行覆盖):
   PUSH_URL, PUSH_KEY        必填
+  SOURCE                    subscheck(默认) | clash
   MAX_NODES                 推送节点数上限,默认 100
   MIN_KEEP                  少于这个数就不推送,保住上一批,默认 10
   SUBS_OUTPUT               subs-check 结果文件路径,默认 <HOME>/bin/output/all.yaml
@@ -68,6 +77,7 @@ OUTPUT = os.environ.get("SUBS_OUTPUT") or str(OUTPUT_DIR / "all.yaml")
 MAX_NODES = int(os.environ.get("MAX_NODES", "100"))
 MIN_KEEP = int(os.environ.get("MIN_KEEP", "10"))
 GEOIP_STRICT = os.environ.get("GEOIP_STRICT", "1").strip() not in ("0", "false", "no", "")
+SOURCE = os.environ.get("SOURCE", "subscheck").strip().lower()
 
 # 历史节点"三振出局":连续几轮没在测活结果里出现,就从"每轮强制重测"名单里除名,
 # 转入被动归档池(只有真正凑不够数的时候才作为垫底候选)。
@@ -434,8 +444,18 @@ def round_robin(buckets: dict, limit: int) -> list:
 
 
 def sort_key(p: dict, stats: dict):
-    """桶内排序:能解锁 Claude 的优先 → 历史出现次数多的(更稳定)优先 → 名字。"""
+    """桶内排序:能解锁 Claude 的优先 → 快/稳的优先 → 名字。
+
+    第二档用什么衡量"快/稳",取决于数据源:
+      - SOURCE=clash 时每个节点都带着刚刚实测出来的延迟(_delay),那当然用延迟——
+        它反映的是"此时此刻好不好用",比任何历史统计都准。
+      - SOURCE=subscheck 时没有逐节点的延迟数字,退回用累计出现次数:反复出现过的
+        节点背后的机器/线路更长期稳定。
+    """
     name = str(p.get("name", ""))
+    delay = p.get("_delay")
+    if delay is not None:
+        return (0 if has_cl(name) else 1, int(delay), name)
     appearances = stats.get(identity_of(p), {}).get("appearances", 0)
     return (0 if has_cl(name) else 1, -appearances, name)
 
@@ -446,16 +466,30 @@ def main():
     if not PUSH_URL or not PUSH_KEY:
         log("ERROR: PUSH_URL / PUSH_KEY 没设置。中止。")
         sys.exit(1)
-    if not os.path.exists(OUTPUT):
-        log(f"ERROR: 找不到 subs-check 的输出文件: {OUTPUT}")
+    if SOURCE not in ("subscheck", "clash"):
+        log(f"ERROR: 未知的 SOURCE={SOURCE}(可用: subscheck | clash)")
         sys.exit(1)
 
-    log(f"===== {now_str()} 选点开始(只要美国节点,上限 {MAX_NODES}) =====")
+    log(f"===== {now_str()} 选点开始(数据源 {SOURCE},只要美国节点,上限 {MAX_NODES}) =====")
 
-    proxies = load_yaml(OUTPUT)
+    if SOURCE == "clash":
+        try:
+            import clash_source
+            proxies = clash_source.load_proxies()
+        except Exception as e:
+            # 来源不可用时不能"推一批空的"——那等于把家里的订阅清掉。中止,保住上一批。
+            log(f"ERROR: 读不到本地 Clash 的节点: {e}")
+            log("       本轮跳过推送,保留 Deno 上一批节点。")
+            sys.exit(1)
+    else:
+        if not os.path.exists(OUTPUT):
+            log(f"ERROR: 找不到 subs-check 的输出文件: {OUTPUT}")
+            sys.exit(1)
+        proxies = load_yaml(OUTPUT)
+
     typed = [p for p in proxies if p.get("type") in BUILDERS]
     if not typed:
-        log("测速结果里没有 vless/anytls/trojan 节点,没什么可推的。")
+        log("候选里没有 vless/anytls/trojan 节点,没什么可推的。")
         sys.exit(0)
 
     verifier = UsVerifier()
@@ -477,6 +511,19 @@ def main():
     if not candidates:
         log("ERROR: 一个美国节点都没有。本轮跳过推送,保留 Deno 上一批节点。")
         sys.exit(1)
+
+    # Clash 源:对已经确认在美国的节点再做一次实测延迟筛选。
+    # 放在 US 核实之后是为了少打 API——一池子几百个节点里可能只有几十个是美国的。
+    if SOURCE == "clash":
+        try:
+            candidates = clash_source.filter_by_delay(candidates)
+        except Exception as e:
+            log(f"ERROR: 实测延迟失败: {e}")
+            log("       本轮跳过推送,保留 Deno 上一批节点。")
+            sys.exit(1)
+        if not candidates:
+            log("ERROR: 没有一个美国节点的实测延迟达标。本轮跳过推送,保留 Deno 上一批节点。")
+            sys.exit(1)
 
     # 记一笔"这些节点这次也出现了",拿到累计出现次数用于稳定性排序。
     try:

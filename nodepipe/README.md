@@ -159,6 +159,67 @@ server-country 库(PDDL 协议,不用注册/不用 key),默认每 7 天自动刷
 | 数量 | vless 桶 30 + other 桶 30,再砍到 50 | 按协议轮转,上限 100 |
 | `/us` 独立链路 | `us_archive.py` + `/push-us` + 隐藏的 `/us` 链接 | 整条删掉(主池本来就全是美国节点了) |
 
+## 另一条数据源:直接用本地 Clash Verge Rev 的节点
+
+平时定时任务走的是 subs-check。但你也可以把**本地 Clash Verge Rev 里当下实测延迟达标**的
+节点直接推出去,不用等下一轮测速:
+
+```bash
+SOURCE=clash python3 select_and_push.py
+```
+
+后面的美国核实、轮转选点、上限、三层兜底、推送全部跟 subs-check 那条路共用同一份代码,
+只有"从哪儿拿候选 + 怎么判断好不好用"这一步不同。
+
+### 它是怎么工作的
+
+Clash 的 REST API **只给节点名和延迟,不给完整连接参数**(server/port/uuid/password 一个
+都没有),光靠 API 重建不出分享链接。所以要两边都读:
+
+1. `clash-verge.yaml`(Clash Verge Rev 数据目录下的运行时合并配置)—— mihomo 内核当前
+   真正加载的那份,`proxies:` 里有完整参数,而且结构跟 subs-check 的 all.yaml 完全一样,
+   所以解析层一行都不用改。
+2. Clash API 的 `/proxies/{name}/delay` —— 实测延迟,按节点名跟上面那份对应起来。
+
+顺序上是**先做美国核实,再测延迟**——一池子几百个节点里可能只有几十个是美国的,
+没必要对其余的也各测一次 API。
+
+### 连接方式
+
+Clash Verge Rev 的 `enable_external_controller` **默认是关的**,也就是说默认情况下 mihomo
+根本没在监听 HTTP 端口,只开了 unix socket(macOS/Linux)或命名管道(Windows)。
+
+所以这里**优先走 unix socket**,macOS 和 Ubuntu 上你什么设置都不用改就能连上。
+TCP 是备选(默认 `127.0.0.1:9097` —— 注意不是常见的 9090,Clash Verge Rev 用的是 9097)。
+
+Windows 上命名管道走不了 Python 标准库的 HTTP,需要你在
+**设置 → Clash 内核 → 外部控制器** 里打开走 TCP;脚本连不上时会明确提示这一点。
+
+### 相关环境变量
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `SOURCE` | `subscheck` | 设成 `clash` 走这条路 |
+| `CLASH_MAX_DELAY` | `800` | 延迟阈值(毫秒),超过的不要 |
+| `CLASH_TEST_URL` | `http://www.gstatic.com/generate_204` | 测延迟用的地址 |
+| `CLASH_TEST_TIMEOUT` | `5000` | 单个节点测延迟的超时(毫秒) |
+| `CLASH_CONCURRENCY` | `16` | 同时测几个 |
+| `CLASH_HOME` | 按平台自动找 | Clash Verge Rev 数据目录,装在别处时用 |
+| `CLASH_PROFILE` | `<CLASH_HOME>/clash-verge.yaml` | 直接指定含 proxies 的 YAML |
+| `CLASH_API` / `CLASH_SECRET` | 从 `config.yaml` 读 | 手动指定控制器和密钥 |
+
+排序也会跟着变:这条路上每个节点都带着刚测出来的延迟,桶内排序就用延迟
+(比"历史出现次数"更能反映当下好不好用);subs-check 那条路没有逐节点延迟,仍用出现次数。
+
+**任何一步失败(Clash 没在跑、找不到配置、一个节点都不达标)都会中止本轮并保留 Deno 上
+一批节点**,不会推一批空的把家里的订阅清掉。
+
+### 想让它也自动跑
+
+把定时任务的命令换成带 `SOURCE=clash` 的那条即可。不过要注意:这条路依赖 Clash Verge Rev
+正在运行,而且它只测**延迟**不测**带宽**,也拿不到 Claude 解锁检测(`CL-` 标签)——
+那两样是 subs-check 才有的。两条路并存、按需切换通常比二选一更合适。
+
 ## 日常操作
 
 ```bash

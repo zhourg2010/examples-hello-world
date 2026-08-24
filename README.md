@@ -36,6 +36,7 @@ nodepipe/
   run_once.py             跑一轮完整流程(测活测速 → 回调推送)
   archive_sub.py          归档订阅源原始内容(独立小工具,跟主链路无关)
   install_scheduler.py    在当前平台装/卸载定时任务,三平台一条命令
+  clash_source.py         另一条数据源:本地 Clash Verge Rev 的节点 + 实测延迟
   geoip.py                本地 GeoIP 库(判断节点服务器是否真在美国)
   node_cache.py           节点出现次数统计(排序时当"稳定性"用)
   scheduler/
@@ -44,6 +45,18 @@ nodepipe/
     windows/…xml          计划任务模板
   env.example             配置模板
 ```
+
+### 两条数据源
+
+平时定时任务走 subs-check。也可以把**本地 Clash Verge Rev 里当下实测延迟达标**的节点
+直接推出去,不用等下一轮测速:
+
+```bash
+SOURCE=clash python3 select_and_push.py
+```
+
+两条路只在"从哪儿拿候选 + 怎么判断好不好用"这一步不同,后面的美国核实、轮转选点、
+上限、三层兜底、推送全部共用同一份代码。细节见 [nodepipe/README.md](nodepipe/README.md#另一条数据源直接用本地-clash-verge-rev-的节点)。
 
 ## 三、Deno 端
 
