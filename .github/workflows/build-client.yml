@@ -79,15 +79,25 @@ jobs:
           workspaces: client -> target
           key: ${{ matrix.target }}
 
-      # 显式装一遍目标架构。上面 dtolnay/rust-toolchain 的 targets 输入**实测没生效**:
-      # macOS Intel 那个 job 报 "Target x86_64-apple-darwin is not installed
-      # (installed targets: aarch64-apple-darwin)"。同一轮里 ARM 能过,只是因为
-      # aarch64 恰好是 macOS runner 的宿主架构、默认就装着 —— 它压根没用到那个输入。
-      # Linux/Windows 同理编译的都是各自宿主架构,所以只有 macOS Intel 这种交叉编译会露馅。
-      # rustup target add 是幂等的,已经装了就是个 no-op,放这儿当兜底最省心。
-      # 放在缓存步骤**之后**,免得缓存恢复把它盖掉。
+      # 显式装目标架构 —— 注意 working-directory 必须是 client,这是关键。
+      #
+      # client/rust-toolchain.toml 钉死了 channel = "1.95.0"。于是有两套工具链:
+      #   上面 dtolnay/rust-toolchain 装的是 stable,targets 输入也是加到 stable 上;
+      #   而 cargo/tauri 在 client/ 里跑时,rustup 读到 rust-toolchain.toml 会切到 1.95.0。
+      # 目标装在 stable 上,编译用的却是 1.95.0,自然报 "target is not installed"。
+      #
+      # rustup target add 认的也是**当前目录**解析出来的工具链,所以这一步必须在 client/
+      # 里跑,才会加到 1.95.0 上。上一版漏了 working-directory,跑在仓库根目录
+      # (那里没有 rust-toolchain.toml),加到的还是 stable,等于没修。
+      #
+      # ARM 一直没事,是因为 1.95.0 被自动装上时默认就带了宿主架构 aarch64;
+      # Linux/Windows 编译的同样是各自宿主架构。四个目标里只有 macOS Intel 是真交叉编译。
       - name: 确保目标架构已安装
-        run: rustup target add ${{ matrix.target }}
+        working-directory: client
+        run: |
+          rustup show active-toolchain
+          rustup target add ${{ matrix.target }}
+          rustup target list --installed
 
       # webkit2gtk 是 Tauri 在 Linux 上的 WebView 后端;
       # libayatana-appindicator3 给托盘图标用;patchelf 给 AppImage 打包用。
