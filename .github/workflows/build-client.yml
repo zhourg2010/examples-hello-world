@@ -148,7 +148,11 @@ jobs:
         with:
           files: dist/**/*
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('client-dev-{0}', github.run_number) }}
-          name: 自定义 Clash 客户端 ${{ github.ref_type == 'tag' && github.ref_name || format('(开发构建 #{0})', github.run_number) }}
+          # 这一行**必须加引号**。里面的 "构建 #{0}" 有个空格加井号,YAML 会把 ` #` 之后的
+          # 内容当成注释整段吃掉,只剩下 "...format('(开发构建" —— 一个没闭合的表达式。
+          # GitHub 解析不了这个表达式,会判整个工作流无效:所有触发方式一律不跑,直接
+          # startup_failure(连 jobs 都不创建)。这个 workflow 从加进来那天起 14 次全红就是它。
+          name: "自定义 Clash 客户端 ${{ github.ref_type == 'tag' && github.ref_name || format('(开发构建 #{0})', github.run_number) }}"
           body: |
             基于 Clash Verge Rev 修改，加了「一键推送美国节点到 Deno」按钮（在代理页测延迟按钮旁边）。
 
