@@ -76,6 +76,16 @@ jobs:
           workspaces: client/src-tauri -> target
           key: ${{ matrix.target }}
 
+      # 显式装一遍目标架构。上面 dtolnay/rust-toolchain 的 targets 输入**实测没生效**:
+      # macOS Intel 那个 job 报 "Target x86_64-apple-darwin is not installed
+      # (installed targets: aarch64-apple-darwin)"。同一轮里 ARM 能过,只是因为
+      # aarch64 恰好是 macOS runner 的宿主架构、默认就装着 —— 它压根没用到那个输入。
+      # Linux/Windows 同理编译的都是各自宿主架构,所以只有 macOS Intel 这种交叉编译会露馅。
+      # rustup target add 是幂等的,已经装了就是个 no-op,放这儿当兜底最省心。
+      # 放在缓存步骤**之后**,免得缓存恢复把它盖掉。
+      - name: 确保目标架构已安装
+        run: rustup target add ${{ matrix.target }}
+
       # webkit2gtk 是 Tauri 在 Linux 上的 WebView 后端;
       # libayatana-appindicator3 给托盘图标用;patchelf 给 AppImage 打包用。
       # 这几个是从上游 release.yml 里抄的,少一个都构建不过。
