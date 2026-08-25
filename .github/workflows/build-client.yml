@@ -73,8 +73,21 @@ jobs:
       - name: 缓存 Rust 构建产物
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: client/src-tauri -> target
+          # client/Cargo.toml 是 [workspace],src-tauri 只是成员之一。Cargo 工作区的
+          # target 目录在**工作区根目录**,所以这里是 client 而不是 client/src-tauri。
+          # 原来写错了,等于缓存一直没命中过 —— 每轮都在从零编译。
+          workspaces: client -> target
           key: ${{ matrix.target }}
+
+      # 显式装一遍目标架构。上面 dtolnay/rust-toolchain 的 targets 输入**实测没生效**:
+      # macOS Intel 那个 job 报 "Target x86_64-apple-darwin is not installed
+      # (installed targets: aarch64-apple-darwin)"。同一轮里 ARM 能过,只是因为
+      # aarch64 恰好是 macOS runner 的宿主架构、默认就装着 —— 它压根没用到那个输入。
+      # Linux/Windows 同理编译的都是各自宿主架构,所以只有 macOS Intel 这种交叉编译会露馅。
+      # rustup target add 是幂等的,已经装了就是个 no-op,放这儿当兜底最省心。
+      # 放在缓存步骤**之后**,免得缓存恢复把它盖掉。
+      - name: 确保目标架构已安装
+        run: rustup target add ${{ matrix.target }}
 
       # webkit2gtk 是 Tauri 在 Linux 上的 WebView 后端;
       # libayatana-appindicator3 给托盘图标用;patchelf 给 AppImage 打包用。
@@ -126,14 +139,19 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.label }}
-          # dmg/msi/deb/AppImage 各平台只会命中自己那几个,匹配不到的忽略
+          # 路径同样是 client/target 而不是 client/src-tauri/target(见上面缓存那段的说明)。
+          # 写错的后果很隐蔽:构建是绿的,收集产物这一步也是绿的,但一个文件都没上传 ——
+          # run #17 三个平台构建成功,Artifacts 里却是 0 个,就是这么来的。
+          # dmg/msi/deb/AppImage 各平台只会命中自己那几个。
           path: |
-            client/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            client/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
-            client/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
-            client/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
-            client/src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
-          if-no-files-found: warn
+            client/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            client/target/${{ matrix.target }}/release/bundle/**/*.msi
+            client/target/${{ matrix.target }}/release/bundle/**/*.exe
+            client/target/${{ matrix.target }}/release/bundle/**/*.deb
+            client/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+          # 用 error 不用 warn:路径写错时必须红着失败。warn 会让"构建成功但没有产物"
+          # 看起来一切正常,正是上面那个 bug 藏了一整轮没被发现的原因。
+          if-no-files-found: error
           retention-days: 30
 
   release:
