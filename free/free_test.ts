@@ -1,5 +1,6 @@
 // free/free_test.ts — 免费节点抓取链路的测试。
-// 跑: deno test free/free_test.ts
+// 跑: deno test -A free/free_test.ts
+// (必须带 -A:最后那个用例会起一个本地 HTTP 服务来模拟坏掉的源,没有 --allow-net 跑不起来)
 //
 // 用例大多来自开发过程中真实踩到的坑,不是照着函数签名补出来的:
 //   - IPv6 未加引号(真实源里的写法,按第一个冒号切会全解析错)

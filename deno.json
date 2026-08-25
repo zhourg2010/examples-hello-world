@@ -1,8 +1,21 @@
 {
   "tasks": {
-    "dev": "deno run --watch --allow-read --allow-net --allow-env --unstable-kv main.ts"
+    "dev": "deno run --watch --allow-read --allow-net --allow-env --unstable-kv main.ts",
+    "check": "deno check main.ts free/*.ts routes/*.ts",
+    "test": "deno test -A"
   },
   "imports": {
     "@std/http": "jsr:@std/http@1"
+  },
+  // client/ 是 Tauri + Node 的项目(vendor 来的 Clash Verge Rev 源码),不归 Deno 管。
+  // 不排除的话 deno lint 会去 lint 那 288 个文件、报 385 个问题,CI 一加上就是红的。
+  "exclude": ["client/"],
+  "lint": {
+    "rules": {
+      // main.ts / db.ts / free/store.ts 里的 jsr: 内联导入是本仓库既有的写法。
+      // 要"修"得把它们挪进上面的 imports 再重新生成 deno.lock —— 那是独立的一件事,
+      // 而且改错了会影响线上部署。这里先如实豁免,不拿它当噪音每次红一下。
+      "exclude": ["no-import-prefix", "no-unversioned-import"]
+    }
   }
 }
