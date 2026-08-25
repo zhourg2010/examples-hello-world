@@ -66,7 +66,10 @@ export async function handleFreePool(req: Request, url: URL): Promise<Response> 
 
   const q = url.searchParams;
   const rows = await getPool({
-    limit: Math.min(Number(q.get("limit") ?? 500) || 500, 5000),
+    // 下限也要夹。原来只有 Math.min(…, 5000),负数会原样传进 SQL,
+    // Postgres 对 LIMIT -5 是直接报错("LIMIT must not be negative")、整个接口 500。
+    // 接口本身有 PUSH_KEY 鉴权,不是安全问题,但没道理让一个手滑的参数把接口打挂。
+    limit: Math.min(Math.max(1, Number(q.get("limit") ?? 500) || 500), 5000),
     perCred: Math.max(1, Number(q.get("perCred") ?? 3) || 3),
     protos: (q.get("protos") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     freshDays: Math.max(1, Number(q.get("days") ?? 7) || 7),
