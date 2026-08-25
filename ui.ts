@@ -4,7 +4,7 @@
 
 import { ADMIN_EMAIL } from "./config.ts";
 import type { Device, DeviceHit } from "./kv.ts";
-import { iconSvg, metaOf } from "./clients.ts";
+import { metaOf } from "./clients.ts";
 import { appleHintOf, parseOs, parseUa } from "./ua.ts";
 import type { NodeStats } from "./node-stats.ts";
 import { ALL_PROTOS, countFor, DEFAULT_FORMAT, DEFAULT_FORMAT_TAGS, FORMATS, type FormatSpec, LISTED_FORMATS } from "./formats.ts";
@@ -33,7 +33,7 @@ function timeAgo(ts?: number): string {
 
 const STYLE = `<style>
   @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&display=swap');
-  :root{--bg:#f3f2f2;--fg:#1a1a1a;--muted:#6b6b68;--accent:#ec3013;--accent-ink:#fff;--bd:#1a1a1a;--bd2:#c9c7c3;--card:#ffffff;--ok:#1a7a3c;--warn:#92400e}
+  :root{--bg:#f3f2f2;--fg:#1a1a1a;--muted:#6b6b68;--accent:#ec3013;--accent-ink:#fff;--bd:#1a1a1a;--bd2:#c9c7c3;--faint:#9b9a96;--card:#ffffff;--ok:#1a7a3c;--warn:#92400e}
   *{box-sizing:border-box}
   body{font-family:'Archivo',system-ui,-apple-system,sans-serif;max-width:1120px;margin:0 auto;padding:0 20px 60px;color:var(--fg);background:var(--bg)}
   h2{margin:28px 0 14px;font-size:20px;font-weight:700;letter-spacing:-.01em}
@@ -72,34 +72,62 @@ const STYLE = `<style>
   .box{max-width:380px;margin:80px auto}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
   .hits{font-size:12px;color:var(--muted)}
-  /* 设备 Dock:一条横向的图标带,鼠标滚轮左右滑。图标悬停放大,点开看详情。 */
-  .dock-wrap{max-width:760px}
-  /* 注意:这里**不能**开 scroll-behavior:smooth。开了以后 scrollLeft 读回来的是动画
-     途中的旧值,下面 JS 判断"是不是已经滚到头了"就会一直判错,滚到最左还接着拦截页面
-     滚动。滚轮本来就是一小格一小格来的,不加动画反而跟手。 */
-  .dock{display:flex;gap:6px;overflow-x:auto;overflow-y:hidden;padding:6px 2px 8px;
-    scrollbar-width:thin}
-  /* 细横向滚动条,不占地方但看得见 */
-  .dock::-webkit-scrollbar{height:6px}
-  .dock::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:3px}
-  .dock::-webkit-scrollbar-track{background:transparent}
-  .dock-item{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:3px;
-    width:62px;padding:4px 2px;background:none;border:none;cursor:pointer;
-    transition:transform .14s ease;transform-origin:bottom center}
-  .dock-item:hover{transform:scale(1.18) translateY(-2px);background:none}
-  .dock-item.on{transform:scale(1.12) translateY(-2px)}
-  .dock-item.on svg rect{stroke:var(--fg);stroke-width:2}
-  .dock-name{font-size:9px;color:var(--muted);line-height:1.15;text-align:center;
-    max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .dock-item.on .dock-name{color:var(--fg);font-weight:700}
-  .dock-detail:empty{display:none}
-  .dock-detail{background:var(--card);border:1.5px solid var(--bd2);padding:10px 12px;
-    font-size:11px;line-height:1.75;margin-top:2px}
-  .dock-detail h5{margin:0 0 4px;font-size:12px}
-  .dock-detail .kv{display:flex;gap:8px}
-  .dock-detail .kv b{min-width:56px;font-weight:600;color:var(--muted);flex-shrink:0}
-  .dock-detail .rawua{font-family:ui-monospace,Menlo,monospace;font-size:10px;
-    color:var(--muted);word-break:break-all}
+  /* 设备时间轴:把每台设备"最近一次拉订阅"画在一条对数刻度的时间轴上。
+     用对数是因为线性刻度下最近几小时会全挤在最右边一个像素里 —— 而那一段恰恰是
+     最需要分辨的(今天来过 vs 三小时前来过)。7 天以前的一律压到最左端。 */
+  .tl{background:var(--card);border:2px solid var(--bd);max-width:820px}
+  /* margin 左右必须跟 .tl-name(200px)和 .tl-n(70px)完全对齐 —— 轴和轨道要共用
+     同一套坐标,否则刻度就是错的:漏掉右边那 70px 的话,"现在"会落在轨道之外,
+     点永远够不着它(实测差了 70px,约轨道宽度的 11%)。 */
+  .tl-axis{position:relative;height:24px;border-bottom:2px solid var(--bd);
+    margin-left:200px;margin-right:70px}
+  .tl-axis span{position:absolute;top:7px;transform:translateX(-50%);font-size:9px;
+    font-weight:700;letter-spacing:.1em;color:var(--faint);white-space:nowrap}
+  .tl-axis span.end{transform:translateX(-100%)}
+  .tl-row{display:flex;align-items:center;height:44px;border-bottom:1px solid var(--bd2)}
+  .tl-row:last-child{border-bottom:none}
+  .tl-name{width:200px;flex:0 0 auto;padding:0 14px;border-right:1px solid var(--bd2);
+    height:100%;display:flex;flex-direction:column;justify-content:center;overflow:hidden}
+  .tl-name b{font-size:12.5px;font-weight:800;letter-spacing:-.01em;line-height:1.25;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tl-name span{font-size:10px;color:var(--muted);margin-top:2px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .tl-track{position:relative;flex:1;height:100%;min-width:0}
+  /* 刻度线的位置由 TS 里同一个函数算出来(见 ui.ts 的 tlPos),不写死百分比 ——
+     写死的话改了刻度函数轴就会开始说谎。 */
+  .tl-grid{position:absolute;top:0;bottom:0;width:1px;background:#eeece8}
+  /* 定位要对准**点本身**,不是"点+标签"这个整体。
+     一开始写的是 translate(-50%,-50%),那居中的是整个 flex 容器 —— 点被标签的宽度
+     推着往左跑,left:0% 的点会跑到左边名字列里去。改成:
+       正常  容器左边缘对齐 → 负 margin 半个点宽,把点心拉回目标位置
+       flip  容器右边缘对齐(row-reverse 下点在最右)→ 正 margin 半个点宽
+     半个点宽 = 5px(点是 10px)。 */
+  .tl-dot{position:absolute;top:50%;transform:translateY(-50%);margin-left:-5px;
+    display:flex;align-items:center;gap:7px}
+  .tl-dot i{width:10px;height:10px;background:var(--fg);display:block;flex:0 0 auto}
+  .tl-dot em{font-style:normal;font-size:10.5px;font-weight:700;white-space:nowrap}
+  /* 颜色的分工(红色只用在真正该看的地方):
+       正常(24 小时内)  实心黑点 —— 健康就是没有颜色
+       安静(1~7 天)     空心灰点 + 灰字 —— 一眼看出谁掉队了
+       失联(≥7 天)      红色 —— 一周没来拉订阅,多半是设备换了/客户端删了/链接失效了
+     一开始把"刚刚来过"标成红色,那是反的:红色代表出问题,不该拿来标一件好事,
+     而且健康的设备本来就都很新,半屏都红之后红色就不再是"看这里"了。 */
+  .tl-dot.cold i{background:none;border:2px solid var(--bd2)}
+  .tl-dot.cold em{color:var(--faint);font-weight:600}
+  .tl-dot.gone i{background:none;border:2px solid var(--accent)}
+  .tl-dot.gone em{color:var(--accent);font-weight:700}
+  /* 靠右端的点,标签翻到左边,免得被容器裁掉 */
+  .tl-dot.flip{flex-direction:row-reverse;transform:translate(-100%,-50%);margin-left:5px}
+  /* 贴着左端的点(≥7 天,被压到 0%):点心正好在 0% 的话会有一半露到轨道外、压在
+     名字列的边线上,看着像没对齐。这一档改成左边缘对齐 —— 它本来就是个"≥"的标记
+     而不是精确时刻,贴着起点反而更贴切。 */
+  .tl-dot.pin{margin-left:0}
+  .tl-n{width:70px;flex:0 0 auto;text-align:right;padding-right:14px;
+    font-size:15px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .tl-n small{font-size:9px;font-weight:700;color:var(--faint);margin-left:3px;letter-spacing:.06em}
+  .tl-row.cold .tl-n{color:var(--faint)}
+  .tl-row.gone .tl-n{color:var(--accent)}
+  .tl-empty{font-size:11px;color:var(--muted);opacity:.65}
   .hr{border-top:2px solid var(--bd);margin:20px 0}
   .qr-mask{display:none;position:fixed;inset:0;background:rgba(26,26,26,.72);align-items:center;justify-content:center;z-index:50}
   .qr-mask.show{display:flex}
@@ -219,48 +247,91 @@ function qrPayloadFor(format: string, url: string, name: string): string {
 // 只有 User-Agent + IP + 时间。所以这里认出来的是**客户端类型**,不是设备身份——
 // 两台都装了小火箭的 iPhone 在这儿长得一模一样。真要区分人/设备,靠的是每台设备一条
 // 不同的订阅链接(不同用户名+id),不是靠这个列表。
-function deviceList(hits: DeviceHit[], dockId: string): string {
+// 时间轴的刻度:把"多久以前"映射到 0(最左=7天前及更早)~ 1(最右=现在)。
+//
+// 用对数而不是线性,是因为线性下最近几小时会全部挤在最右边一两个像素里 —— 而那一段
+// 恰恰最需要分辨("刚刚来过"和"三小时前来过"是两回事)。7 天以前的一律压到最左端:
+// 再往前对"这台设备还在不在用"这个问题已经没有信息量了。
+export const TL_SPAN_HOURS = 168; // 7 天
+
+export function tlPos(ageMs: number): number {
+  const h = Math.max(0, ageMs) / 3600_000;
+  const p = 1 - Math.log1p(h) / Math.log1p(TL_SPAN_HOURS);
+  return Math.max(0, Math.min(1, p));
+}
+
+/** 轴上的刻度。位置由 tlPos 算,不写死 —— 写死的话改了刻度函数轴就会开始说谎。 */
+export const TL_TICKS: Array<{ h: number; label: string }> = [
+  { h: TL_SPAN_HOURS, label: "7 天前" },
+  { h: 72, label: "3 天" },
+  { h: 24, label: "24 小时" },
+  { h: 6, label: "6 小时" },
+  { h: 0, label: "现在" },
+];
+
+function deviceList(hits: DeviceHit[], _id: string): string {
   if (hits.length === 0) {
-    return `<div style="font-size:11px;color:var(--muted);margin:4px 0 0 150px;opacity:.65">还没有客户端拉过这条链接</div>`;
+    return `<div class="tl-empty" style="margin:6px 0 0 150px">还没有客户端拉过这条链接</div>`;
   }
 
-  const items = hits.map((h, i) => {
+  const now = Date.now();
+  const axis = TL_TICKS.map((t) => {
+    const pct = (tlPos(t.h * 3600_000) * 100).toFixed(2);
+    // 最右那个"现在"要往左收,不然半个标签会被容器裁掉
+    const cls = t.h === 0 ? ' class="end"' : "";
+    return `<span${cls} style="left:${pct}%">${t.label}</span>`;
+  }).join("");
+
+  // 刻度线只画中间那几条:两端就是边框本身,再画一条是多余的
+  const grid = TL_TICKS.slice(1, -1)
+    .map((t) => `<div class="tl-grid" style="left:${(tlPos(t.h * 3600_000) * 100).toFixed(2)}%"></div>`)
+    .join("");
+
+  // 最近的排最前面,于是点在轴上从右往左依次下沉,扫一眼就看出谁掉队了
+  const rows = [...hits].sort((a, b) => b.last - a.last).map((h) => {
     const info = parseUa(h.ua);
     const meta = metaOf(info.client);
     const os = parseOs(h.ua, appleHintOf(info.client));
-    // 详情内容一次性塞进 data 属性,点击时由前端直接读,不用再发请求
-    const detail = {
-      client: info.known ? info.client : "未识别的客户端",
-      version: info.version,
-      what: meta.what,
-      platforms: meta.platforms,
-      core: meta.core ?? "",
-      openSource: meta.openSource === true ? "开源" : meta.openSource === false ? "闭源" : "",
-      home: meta.home ?? "",
-      os,
-      ip: h.ip,
-      hwid: h.hwid,
-      count: h.count,
-      ago: timeAgo(h.last),
-      ua: h.ua,
-    };
-    const label = info.known ? info.client : "未识别";
-    return `<button type="button" class="dock-item" data-dock="${dockId}" data-i="${i}"
-        data-detail="${escapeHtml(JSON.stringify(detail))}"
-        title="${escapeHtml(label)}${info.version ? " " + escapeHtml(info.version) : ""}\n${escapeHtml(h.ua)}">
-        ${iconSvg(meta)}
-        <span class="dock-name">${escapeHtml(label)}</span>
-      </button>`;
+    const age = now - h.last;
+    const hours = age / 3600_000;
+    // ≥7 天 = 失联(标红,值得去看一眼);24 小时~7 天 = 安静(灰);其余是正常
+    const state = hours >= TL_SPAN_HOURS ? "gone" : hours >= 24 ? "cold" : "";
+    const pct = tlPos(age) * 100;
+    // 点落在右边 65% 之后,把时间标签翻到点的左边,免得被裁
+    const flip = pct > 65 ? " flip" : pct < 1 ? " pin" : "";
+
+    const name = info.known ? info.client : "未识别";
+    // 第二行放版本/系统/IP;认出来的客户端还把"它是个什么东西"塞进 title,
+    // 鼠标停上去就能看到,不占版面(之前那版把这段藏在点击之后,反而没人会去点)
+    const sub = [info.version, os, h.ip].filter(Boolean).join(" · ");
+    const tip = [
+      info.known ? `${info.client}${info.version ? " " + info.version : ""}` : "未识别的客户端",
+      meta.what,
+      meta.platforms ? `平台:${meta.platforms}` : "",
+      meta.core ? `内核:${meta.core}` : "",
+      h.hwid ? `设备标识:${h.hwid}` : "",
+      `原始 UA:${h.ua}`,
+    ].filter(Boolean).join("\n");
+
+    return `<div class="tl-row${state ? " " + state : ""}" title="${escapeHtml(tip)}">
+      <div class="tl-name"><b>${escapeHtml(name)}</b><span>${escapeHtml(sub || "—")}</span></div>
+      <div class="tl-track">${grid}
+        <div class="tl-dot ${state}${flip}" style="left:${pct.toFixed(2)}%"><i></i><em>${timeAgo(h.last)}</em></div>
+      </div>
+      <div class="tl-n">${h.count}<small>次</small></div>
+    </div>`;
   }).join("");
 
-  return `<div class="dock-wrap" style="margin:6px 0 0 150px">
-      <div class="dock" id="${dockId}">${items}</div>
-      <div class="dock-detail" id="${dockId}-d"></div>
+  return `<div class="tl" style="margin:6px 0 0 150px">
+      <div class="tl-axis">${axis}</div>
+      ${rows}
     </div>`;
 }
 
 function linkRow(
-  dockId: string,
+  // 以前 Dock 用这个 id 关联点开的详情面板;时间轴不需要详情面板了,
+  // 但每条链接各有一条时间轴,仍然要个键来区分,所以保留成中性的名字。
+  rowKey: string,
   spec: FormatSpec,
   url: string,
   qr: string,
@@ -283,12 +354,12 @@ function linkRow(
       <div style="font-size:11px;color:var(--muted);margin:3px 0 0 150px">
         支持:${escapeHtml(spec.clients)}${spec.note ? `<br><span style="color:var(--muted);font-style:italic">${escapeHtml(spec.note)}</span>` : ""}
       </div>
-      ${deviceList(hits, dockId)}
+      ${deviceList(hits, rowKey)}
       ${variants.map((v, vi) => `<div style="display:flex;align-items:center;gap:8px;margin:5px 0 0 150px;font-size:11px">
         <span style="color:var(--fg);opacity:.75;font-weight:600;flex-shrink:0">↳ ${escapeHtml(v.spec.clients)}</span>
         <code style="font-size:10px;flex:1;overflow:auto;color:var(--muted)">${escapeHtml(v.url)}</code>
         <button type="button" class="ghost" style="padding:2px 8px;font-size:10px" onclick='copyLink(${JSON.stringify(v.url)},this)'>复制</button>
-      </div>${v.spec.note ? `<div style="font-size:11px;color:var(--muted);margin:2px 0 0 166px;font-style:italic">${escapeHtml(v.spec.note)}</div>` : ""}${deviceList(v.hits, `${dockId}-v${vi}`)}`).join("")}
+      </div>${v.spec.note ? `<div style="font-size:11px;color:var(--muted);margin:2px 0 0 166px;font-style:italic">${escapeHtml(v.spec.note)}</div>` : ""}${deviceList(v.hits, `${rowKey}-v${vi}`)}`).join("")}
     </div>`;
 }
 
@@ -315,7 +386,7 @@ export function dashboardPage(opts: {
 
     // 不带后缀的那条链接:走设备设置的默认格式
     const defaultRow = linkRow(
-      `dock-${d.id}-default`,
+      `dev-${d.id}-default`,
       { ...defSpec, label: `${defSpec.label}(默认,不带后缀)` },
       link, qrPayloadFor(fmt, link, d.username),
       countFor(defSpec, nodeStats.byProto), nodeStats.total, [],
@@ -331,7 +402,7 @@ export function dashboardPage(opts: {
         .filter(Boolean)
         .map((vs) => ({ spec: vs, url: `${link}/${vs.tag}`, hits: hitsOf.get(vs.tag) ?? [] }));
       return linkRow(
-        `dock-${d.id}-${spec.tag}`, spec, tagLink, qrPayloadFor(spec.tag, tagLink, `${d.username}-${spec.tag}`),
+        `dev-${d.id}-${spec.tag}`, spec, tagLink, qrPayloadFor(spec.tag, tagLink, `${d.username}-${spec.tag}`),
         countFor(spec, nodeStats.byProto), nodeStats.total, variants,
         hitsOf.get(spec.tag) ?? [],
       );
@@ -532,75 +603,12 @@ export function dashboardPage(opts: {
     const h=(location.hash||'').replace('#','');
     if(h){ const el=document.querySelector('.nav a[data-pane="'+h+'"]'); if(el) showPane(h,el); }
   })();
-  // 设备 Dock:滚轮左右滑 + 点图标看详情
-  function initDocks(){
-    document.querySelectorAll('.dock').forEach(function(dock){
-      if(dock.dataset.bound) return;
-      dock.dataset.bound = '1';
-      // 鼠标滚轮的 deltaY 转成横向滚动。只有真的还能滚的时候才拦截默认行为,
-      // 否则滚到头之后页面就不能继续往下滚了,很难受。
-      dock.addEventListener('wheel', function(e){
-        if(e.deltaX !== 0) return;              // 触控板横向手势,交给浏览器自己处理
-        var max = dock.scrollWidth - dock.clientWidth;
-        if(max <= 1) return;                     // 没有可滚的内容,别拦
-        var at = dock.scrollLeft;
-        // 滚到头了就把滚轮还给页面。留 1px 容差:scrollWidth/clientWidth 在缩放下是小数,
-        // 严格相等永远不成立,会出现"到底了还拦着"的死角。
-        if((e.deltaY < 0 && at <= 1) || (e.deltaY > 0 && at >= max - 1)) return;
-        e.preventDefault();
-        dock.scrollLeft = Math.max(0, Math.min(max, at + e.deltaY));
-      }, {passive:false});
-    });
-
-    document.querySelectorAll('.dock-item').forEach(function(btn){
-      if(btn.dataset.bound) return;
-      btn.dataset.bound = '1';
-      btn.addEventListener('click', function(){
-        var dockId = btn.dataset.dock;
-        var panel = document.getElementById(dockId + '-d');
-        var wasOn = btn.classList.contains('on');
-        // 同一条 Dock 里只亮一个
-        document.querySelectorAll('.dock-item[data-dock="'+dockId+'"]').forEach(function(b){
-          b.classList.remove('on');
-        });
-        if(wasOn){ panel.innerHTML = ''; return; }   // 再点一次收起
-        btn.classList.add('on');
-        panel.innerHTML = renderDockDetail(JSON.parse(btn.dataset.detail));
-      });
-    });
-  }
-
-  function esc(s){
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
-      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
-    });
-  }
-
-  function renderDockDetail(d){
-    function row(k, v){ return v ? '<div class="kv"><b>'+k+'</b><span>'+esc(v)+'</span></div>' : ''; }
-    var title = esc(d.client) + (d.version ? ' ' + esc(d.version) : '');
-    var tags = [d.openSource, d.core ? '内核 ' + d.core : ''].filter(Boolean).join(' · ');
-    return '<h5>' + title + (tags ? ' <span style="font-weight:400;color:var(--muted)">— ' + esc(tags) + '</span>' : '') + '</h5>'
-      + '<div style="margin-bottom:6px">' + esc(d.what) + '</div>'
-      + row('平台', d.platforms)
-      + row('系统', d.os)
-      + row('IP', d.ip)
-      + row('硬件标识', d.hwid)
-      + row('最近访问', d.ago + (d.count > 1 ? ' · 共 ' + d.count + ' 次' : ''))
-      + row('项目', d.home)
-      + '<div class="kv" style="margin-top:5px"><b>原始 UA</b><span class="rawua">' + esc(d.ua) + '</span></div>';
-  }
-
-  document.addEventListener('DOMContentLoaded', initDocks);
 
   function toggleDeviceDetail(id){
     const target = document.getElementById(id);
     const isOpen = target.style.display !== 'none';
     document.querySelectorAll('.device-detail-tr').forEach(tr=>{ tr.style.display='none'; });
     target.style.display = isOpen ? 'none' : 'table-row';
-    // 链接明细刚展开,里面的 Dock 这时才第一次可见。元素本来就在 DOM 里(初始化时
-    // 已经绑过),这里再调一次是防御性的:initDocks 自己有 dataset.bound 去重,重复调无害。
-    initDocks();
   }
   async function copyLink(text, btn){
     try{ await navigator.clipboard.writeText(text); }
