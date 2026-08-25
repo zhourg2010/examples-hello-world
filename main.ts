@@ -6,6 +6,7 @@ import { ADMIN_PATH, FALLBACK_PATH } from "./config.ts";
 import { maybeSendQuarterEmail } from "./mail.ts";
 import { handleSubscribe } from "./routes/subscribe.ts";
 import { handleAdmin } from "./routes/admin.ts";
+import { handleOs } from "./routes/os.ts";
 import { handleFallback } from "./routes/fallback.ts";
 import { handleTools } from "./routes/tools.ts";
 import { handlePush } from "./routes/push.ts";
@@ -34,6 +35,11 @@ Deno.serve(async (req: Request) => {
   // 应急查码
   if (path === FALLBACK_PATH) {
     return await handleFallback(req);
+  }
+
+  // 桌面版后台(迁移中,跟老后台并存)
+  if (path === ADMIN_PATH + "/os" || path.startsWith(ADMIN_PATH + "/os/")) {
+    return await handleOs(req, url);
   }
 
   // 工具箱
