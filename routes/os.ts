@@ -40,7 +40,7 @@ export async function handleOs(req: Request, url: URL): Promise<Response> {
   if (rest.startsWith("/app/") && req.method === "GET") {
     const id = rest.slice("/app/".length);
     if (!isApp(id)) return new Response("Unknown app", { status: 404 });
-    const frag = await renderApp(id, url.origin, ADMIN_PATH);
+    const frag = await renderApp(id, url.origin);
     return new Response(frag, { headers: { "content-type": "text/html; charset=utf-8" } });
   }
 

@@ -9,15 +9,7 @@
 import { escapeHtml } from "../../ui.ts";
 import { listDevices } from "../../kv.ts";
 import { DEFAULT_FORMAT, DEFAULT_FORMAT_TAGS, FORMATS } from "../../formats.ts";
-
-function ago(ts?: number): string {
-  if (!ts) return "—";
-  const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 60) return `${s} 秒前`;
-  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
-  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
-  return `${Math.floor(s / 86400)} 天前`;
-}
+import { ago, APP_CSS } from "./css.ts";
 
 export async function devicesApp(origin: string): Promise<string> {
   const devices = await listDevices();
@@ -79,35 +71,6 @@ export async function devicesApp(origin: string): Promise<string> {
 <table><thead><tr>
   <th>用户名</th><th>设备码</th><th>状态</th><th>默认格式</th><th>最近访问</th><th>操作</th>
 </tr></thead><tbody>
-${rows || `<tr><td colspan="6" style="color:#86868b;padding:22px 0;text-align:center">还没有设备,用上面那一栏加一台</td></tr>`}
+${rows || `<tr><td colspan="6" class="empty">还没有设备,用上面那一栏加一台</td></tr>`}
 </tbody></table>`;
 }
-
-// app 自己的样式。每个片段自带,免得外壳要预先知道所有 app 需要什么类。
-// 重复注入同名 <style> 是无害的(后面的覆盖前面的,值一样)。
-const APP_CSS = `<style>
-.body h3{font-size:15px;font-weight:700;color:#1d1d1f;margin-bottom:3px}
-.body .sub{font-size:12px;color:#86868b;margin-bottom:14px}
-.body table{width:100%;border-collapse:collapse;font-size:12.5px}
-.body th{text-align:left;font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
-  color:#86868b;padding:0 10px 7px 0;border-bottom:1px solid #eaeaec;white-space:nowrap}
-.body td{padding:9px 10px 9px 0;border-bottom:1px solid #f2f2f4;color:#1d1d1f;vertical-align:middle}
-.body tbody tr:last-child td{border-bottom:none}
-.body tbody tr:hover{background:#fafafa}
-.body .mono{font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:#86868b}
-.body .pill{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:20px;white-space:nowrap}
-.body .pill.on{background:#e8f8ee;color:#1d8348}
-.body .pill.off{background:#f2f2f4;color:#86868b}
-.body .btn{font:inherit;font-size:12px;font-weight:500;padding:4px 10px;border-radius:7px;
-  border:.5px solid #d0d0d6;background:#fff;color:#1d1d1f;cursor:pointer;
-  box-shadow:0 1px 1.5px rgba(0,0,0,.05)}
-.body .btn:hover{background:#f6f6f8}
-.body .btn.primary{background:#0071e3;color:#fff;border-color:#0071e3}
-.body .btn.primary:hover{background:#0062c4}
-.body .btn.danger:hover{background:#fff1f0;color:#b3261e;border-color:#f0c4c0}
-.body .addbar{display:flex;gap:7px;margin-bottom:16px;flex-wrap:wrap}
-.body .addbar input,.body .addbar select{font:inherit;font-size:12.5px;padding:6px 10px;border-radius:7px;
-  border:.5px solid #d0d0d6;background:#fff;min-width:0}
-.body .addbar input{flex:1;min-width:130px}
-.body .addbar select{cursor:pointer}
-</style>`;

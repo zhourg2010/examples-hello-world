@@ -206,21 +206,51 @@ function setBody(w, htmlText){
     old.replaceWith(s);
   });
 }
-async function refresh(id){
+/**
+ * 重拉某个窗口的内容。**有未保存改动的窗口默认跳过** —— 不然在别的窗口点一下
+ * "停用设备",节点内容里辛苦排了半天的顺序就被静悄悄冲掉了,而且没有任何提示。
+ * 真要强制重拉(比如那个 app 自己刚保存完)传 force。
+ */
+async function refresh(id, force){
   const w = wins[id];
   if (!w) return;
+  if (!force && w.dataset.dirty === '1') return;
+  delete w.dataset.dirty;
   setBody(w, await loadApp(id));
 }
-/** 变更操作:提交后只重拉受影响的窗口,不整页刷新 —— 窗口位置和其它窗口都保住。 */
-async function submit(form){
-  const fd = new FormData(form);
+/** 发一个变更操作并弹通知。返回服务端那个 {ok,msg} —— app 想自己接着做事就用它。 */
+async function postAction(fd){
   const r = await fetch(BASE + '/os/act', { method: 'POST', body: fd, headers: { 'x-os': '1' } });
   let out; try { out = await r.json(); } catch { out = { ok:false, msg:'服务端没有返回 JSON(HTTP ' + r.status + ')' }; }
   toast(out.msg || (out.ok ? '已完成' : '失败'), out.ok);
+  return out;
+}
+/** 变更操作:提交后只重拉受影响的窗口,不整页刷新 —— 窗口位置和其它窗口都保住。 */
+async function submit(form){
+  const out = await postAction(new FormData(form));
   // 一个操作可能影响多个窗口(比如删设备会同时改变访问记录),所以全部重拉。
   for (const id of Object.keys(wins)) await refresh(id);
   return out.ok;
 }
+
+/**
+ * 给 app 片段用的一点点 API。片段里的脚本跟外壳同处一个 window,所以 app **不要**
+ * 往全局挂函数(六个 app 各挂一个 sortBy 就等着串味),要用的东西从这里拿。
+ *   os.act(fd)        发变更操作,拿到 {ok,msg}
+ *   os.toast(msg,ok)  弹通知
+ *   os.refresh(id,f)  重拉某个窗口
+ *   os.others(id)     重拉**除了自己以外**的窗口(自己刚改完,不想被服务端旧值盖回去)
+ *   os.dirty(el,on)   标记/清除"这个窗口有未保存改动"
+ */
+window.os = {
+  act: postAction, toast, refresh,
+  others: async (self) => { for (const id of Object.keys(wins)) if (id !== self) await refresh(id, true); },
+  dirty: (el, on) => {
+    const w = el.closest('.win');
+    if (!w) return;
+    if (on) w.dataset.dirty = '1'; else delete w.dataset.dirty;
+  },
+};
 document.addEventListener('submit', e => {
   const f = e.target.closest('form[data-os]');
   if (!f) return;
@@ -271,7 +301,11 @@ async function make(app){
 }
 function doWin(id, a){
   const w = wins[id]; if (!w) return;
-  if (a === 'close'){ w.remove(); delete wins[id]; }
+  if (a === 'close'){
+    // 有未保存改动的窗口,关之前问一句。红点是最容易误点的一个控件。
+    if (w.dataset.dirty === '1' && !confirm('这个窗口还有未保存的改动,关掉就没了。确定?')) return;
+    w.remove(); delete wins[id];
+  }
   else if (a === 'min'){ w.classList.add('min'); }
   else {
     if (w.dataset.full === '1'){ Object.assign(w.style, JSON.parse(w.dataset.prev)); w.dataset.full='0'; }
@@ -299,7 +333,7 @@ function menu(items, x, y){
   ctx.style.left = (x + w > innerWidth  - 6 ? Math.max(6, x - w) : x) + 'px';
   ctx.style.top  = (y + h > innerHeight - 6 ? Math.max(30, y - h) : y) + 'px';
   ctx.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
-    hideCtx(); if (b.dataset.i) act(b.dataset.i);
+    hideCtx(); if (b.dataset.i) ctxAct(b.dataset.i);
   }));
 }
 function hideCtx(){ $('#ctx').classList.remove('on'); }
@@ -351,7 +385,9 @@ async function post(action, extra){
   for (const id of Object.keys(wins)) await refresh(id);
 }
 
-function act(id){
+/** 右键菜单里选中某一项之后干什么。注意别跟上面发请求的 postAction 重名 ——
+ * 两个同名的函数声明后面那个会静悄悄盖掉前面那个,而且一点报错都没有。 */
+function ctxAct(id){
   const app = APPS.find(a => a.id === ctxTarget);
   const row = ctxTarget instanceof HTMLElement ? ctxTarget : null;
   switch(id){
