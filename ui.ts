@@ -153,6 +153,9 @@ const STYLE = `<style>
   /* 顶部横向导航 */
   .topbar{display:flex;align-items:center;gap:0;border-bottom:3px solid var(--bd);padding:20px 0 0;margin-bottom:0;flex-wrap:wrap}
   .brand{font-weight:800;font-size:16px;letter-spacing:-.01em;margin-right:auto;padding-bottom:14px}
+  /* "旧版"角标。用灰的不用红的 —— 这一版没坏,只是不再是默认入口了。 */
+  .brand-tag{font-size:10px;font-weight:700;letter-spacing:.06em;vertical-align:2px;
+    color:var(--muted);border:1px solid var(--bd2);padding:1px 5px;margin-left:4px}
   .nav{display:flex;gap:2px;flex-wrap:wrap}
   .nav a{display:block;padding:10px 18px;color:var(--fg);text-decoration:none;font-size:13px;font-weight:600;cursor:pointer;border:2px solid transparent;border-bottom:none;margin-bottom:-1px}
   .nav a:hover{color:var(--accent)}
@@ -201,7 +204,13 @@ const STYLE = `<style>
   }
 </style>`;
 
-const HEAD = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${STYLE}`;
+// 页头。带上 <title> —— 现在新旧两版会同时开在两个标签里,没有标题的话两个标签
+// 长得一模一样,只能靠猜。默认那句给登录页/查码页这些共用的小页面。
+const head = (title = "proxy-sub 后台") =>
+  `<!doctype html><html lang="zh-CN"><meta charset="utf-8">` +
+  `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+  `<title>${escapeHtml(title)}</title>${STYLE}`;
+const HEAD = head();
 
 export function loginPage(msg = ""): string {
   return `${HEAD}<div class="box"><h2>管理登录</h2>${msg ? `<p class="err">${escapeHtml(msg)}</p>` : ""}
@@ -455,9 +464,9 @@ export function dashboardPage(opts: {
     ? `上次更新:${timeAgo(nodesUpdated)}(${new Date(nodesUpdated).toLocaleString("zh-CN")})`
     : "尚未保存过节点";
 
-  return `${HEAD}
+  return `${head("proxy-sub 旧版后台")}
   <div class="topbar">
-    <div class="brand">proxy-sub</div>
+    <div class="brand">proxy-sub <span class="brand-tag">旧版</span></div>
     <nav class="nav">
       <a data-pane="status" class="active" onclick="showPane('status',this)">状态</a>
       <a data-pane="devices" onclick="showPane('devices',this)">设备管理</a>
@@ -465,6 +474,7 @@ export function dashboardPage(opts: {
       <a data-pane="backup" onclick="showPane('backup',this)">备份</a>
       <a data-pane="system" onclick="showPane('system',this)">系统 / 邮件</a>
       <a href="${ADMIN_PATH}/tools" class="tool-link">🧰 工具箱</a>
+      <a href="${ADMIN_PATH}" class="tool-link">🖥 新版后台</a>
     </nav>
   </div>
   ${notice}

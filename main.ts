@@ -2,7 +2,7 @@
 // 加新功能时:写一个新的 routes/xxx.ts,然后在下面加一行分派即可,不动其他文件。
 
 import { serveFile } from "jsr:@std/http/file-server";
-import { ADMIN_PATH, FALLBACK_PATH } from "./config.ts";
+import { ADMIN_PATH, CLASSIC_PATH, FALLBACK_PATH } from "./config.ts";
 import { maybeSendQuarterEmail } from "./mail.ts";
 import { handleSubscribe } from "./routes/subscribe.ts";
 import { handleAdmin } from "./routes/admin.ts";
@@ -27,8 +27,9 @@ Deno.serve(async (req: Request) => {
     return await handleSubscribe(parts, req);
   }
 
-  // 管理后台
-  if (path === ADMIN_PATH) {
+  // 管理后台。默认(桌面版)和旧版共用 handleAdmin,由它按 pathname 分。
+  // 注意顺序:CLASSIC_PATH 是 ADMIN_PATH 的子路径,要在下面那条 /os 前缀判断之前先接住。
+  if (path === ADMIN_PATH || path === CLASSIC_PATH) {
     return await handleAdmin(req, url);
   }
 
@@ -37,7 +38,8 @@ Deno.serve(async (req: Request) => {
     return await handleFallback(req);
   }
 
-  // 桌面版后台(迁移中,跟老后台并存)
+  // 桌面版的片段和变更接口。外壳本身现在由 {ADMIN_PATH} 直接给,
+  // {ADMIN_PATH}/os 仍然可用(302 过去),免得之前存的书签失效。
   if (path === ADMIN_PATH + "/os" || path.startsWith(ADMIN_PATH + "/os/")) {
     return await handleOs(req, url);
   }

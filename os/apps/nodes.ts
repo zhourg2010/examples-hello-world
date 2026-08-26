@@ -12,6 +12,10 @@
 //   停用的节点存回去时加 OFF_PREFIX 前缀,protocol-filter.ts 的 stripDisabled 会在
 //   发给任何客户端之前整行剔掉 —— 是真的不发,不是只在这一页看不见。
 //
+// 「解析」是个真链接(<a target="_blank">),不是按钮 + window.open:老后台那边是整页跳到
+// 工具箱,桌面版不能跳 —— 跳走等于把整个桌面连同没保存的改动一起关了;而 window.open 会被
+// 弹窗拦截器拦掉(实测拦了),真链接不会,还白得中键/⌘点击。
+//
 // 老后台那份实现(ui.ts 的 dashboardPage)往 window 上挂了一堆 sortBy/moveNode 这样的
 // 全局函数。桌面版不能这么干:六个 app 共用同一个 window,重名迟早撞车,而且窗口关了
 // 函数还留着。这里整个包在 IIFE 里,DOM 事件一律走委托,对外只碰外壳给的 window.os。
@@ -217,7 +221,8 @@ function render(){
       + '<td class="mono">'+esc(f.security)+'</td>'
       + '<td><div class="acts">'
         + '<button type="button" class="btn sm" data-nd="copy">复制</button>'
-        + '<button type="button" class="btn sm" data-nd="parse">解析</button>'
+        + '<a class="btn sm" target="_blank" rel="noopener" href="' + esc(ADMIN)
+          + '/tools?parse=' + encodeURIComponent(item.uri) + '">解析</a>'
         + '<button type="button" class="btn sm" data-nd="up"'+(upOff?' disabled':'')+'>▲</button>'
         + '<button type="button" class="btn sm" data-nd="down"'+(downOff?' disabled':'')+'>▼</button>'
         + '<span class="grip" title="拖动排序">☰</span>'
@@ -260,12 +265,6 @@ root.addEventListener('click', e => {
   }
   const i = rowOf(b);
   if(act === 'copy'){ copy(b.closest('tr').dataset.uri, b); return; }
-  if(act === 'parse'){
-    // 老后台是整页跳到工具箱。桌面版不能跳 —— 那等于把整个桌面关了,
-    // 而且这个窗口里没保存的改动会一起没。开新标签页两边都保住。
-    window.open(ADMIN + '/tools?parse=' + encodeURIComponent(b.closest('tr').dataset.uri), '_blank');
-    return;
-  }
   if(act === 'up'){ move(i,-1); return; }
   if(act === 'down'){ move(i,1); return; }
   if(act === 'toggle'){ lines[i].disabled = !lines[i].disabled; markDirty(true); render(); return; }
@@ -433,6 +432,7 @@ const CSS = `<style>
 .body .sp i{display:block;height:3px;background:#eaeaec;border-radius:2px;overflow:hidden}
 .body .sp i b{display:block;height:100%;background:#34c759;border-radius:2px}
 .body .acts{display:flex;gap:3px;align-items:center;white-space:nowrap}
+.body a.btn{text-decoration:none;line-height:1.5}
 .body .grip{cursor:grab;color:#c7c7cc;font-size:13px;padding:0 3px;user-select:none}
 .body .grip:active{cursor:grabbing}
 .body .pill.warn{background:#fff4d6;color:#8a5d00}
