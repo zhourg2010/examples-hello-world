@@ -7,7 +7,7 @@
 // 表单提交走 fetch,不整页跳转 —— 桌面隐喻下整页刷新会把所有窗口关掉、位置全丢,
 // 那就不像操作系统,像每点一下就重启一次。提交完只重新拉受影响的那个 app 的片段。
 
-import { ADMIN_PATH } from "../config.ts";
+import { ADMIN_PATH, CLASSIC_PATH } from "../config.ts";
 import { jsonForScript } from "../ui.ts";
 import { APP_ICONS, SQUIRCLE_DEF } from "./icons.ts";
 import { APPS } from "./apps.ts";
@@ -27,7 +27,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display"
 .menubar{position:fixed;top:0;left:0;right:0;height:25px;z-index:9000;display:flex;align-items:center;
   gap:18px;padding:0 12px;font-size:13px;color:#fff;
   background:rgba(0,0,0,.18);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%)}
-.menubar .apl{font-size:15px;margin-right:-4px;opacity:.95}
+.menubar .apl{font-size:15px;margin-right:-4px;opacity:.95;cursor:default;
+  padding:0 7px;border-radius:4px;margin-left:-7px}
+.menubar .apl:hover{background:rgba(255,255,255,.22)}
 .menubar .app{font-weight:600}
 .menubar .sp{margin-left:auto;display:flex;gap:16px;align-items:center;font-size:12.5px;font-variant-numeric:tabular-nums}
 .menubar svg{display:block}
@@ -96,9 +98,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display"
   background:rgba(246,246,246,.76);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);
   box-shadow:0 0 0 .5px rgba(0,0,0,.14),0 8px 28px rgba(0,0,0,.26);font-size:13px;color:#1d1d1f;display:none}
 .ctx.on{display:block}
-.ctx button{display:flex;width:100%;align-items:center;gap:8px;background:none;border:none;font:inherit;
-  text-align:left;padding:4px 9px;border-radius:4px;cursor:default;color:inherit;white-space:nowrap}
-.ctx button:hover:not(:disabled){background:#0a64d4;color:#fff}
+.ctx button,.ctx a{display:flex;width:100%;align-items:center;gap:8px;background:none;border:none;font:inherit;
+  text-align:left;padding:4px 9px;border-radius:4px;cursor:default;color:inherit;white-space:nowrap;
+  text-decoration:none;box-sizing:border-box}
+.ctx button:hover:not(:disabled),.ctx a:hover{background:#0a64d4;color:#fff}
 .ctx button:disabled{color:#b4b4b8}
 .ctx button .k{margin-left:auto;opacity:.55;font-size:12px;padding-left:20px}
 .ctx hr{border:0;border-top:.5px solid rgba(0,0,0,.16);margin:4px 8px}
@@ -143,9 +146,9 @@ ${SQUIRCLE_DEF}
 <div class="wall" id="wall"></div>
 <div class="smallnote"><b>请在电脑上打开</b>
   <span>这是桌面式的界面 —— 窗口、Dock、右键菜单在手机上都用不了。<br>手机请用旧版后台:</span>
-  <a href="${ADMIN_PATH}">打开旧版后台 →</a></div>
+  <a href="${CLASSIC_PATH}">打开旧版后台 →</a></div>
 <div class="menubar">
-  <span class="apl">&#63743;</span><span class="app" id="mbApp">访达</span>
+  <span class="apl" id="mbApple">&#63743;</span><span class="app" id="mbApp">访达</span>
   <span>文件</span><span>编辑</span><span>显示</span><span>前往</span><span>窗口</span><span>帮助</span>
   <span class="sp">
     <svg width="15" height="13" viewBox="0 0 15 13" fill="#fff"><path d="M7.5 11.4 1 5.2a4.4 4.4 0 0 1 6.5-5.9A4.4 4.4 0 0 1 14 5.2z" opacity=".92"/></svg>
@@ -159,6 +162,7 @@ ${SQUIRCLE_DEF}
 <div class="toasts" id="toasts"></div>
 <script>
 const BASE = ${jsonForScript(ADMIN_PATH)};
+const CLASSIC = ${jsonForScript(CLASSIC_PATH)};
 const APPS = ${jsonForScript(meta)};
 const ICONS = ${jsonForScript(APP_ICONS)};
 const WALLS = ${jsonForScript(WALLS)};
@@ -325,7 +329,11 @@ function sync(){ document.querySelectorAll('.dk').forEach(d => d.classList.toggl
 // ---------- 右键 ----------
 function menu(items, x, y){
   const ctx = $('#ctx');
+  // 带 href 的项渲染成真的 <a target="_blank">,不是按钮 + window.open。
+  // window.open 会被弹窗拦截器拦掉(实测就拦了),而且真链接还白得中键/⌘点击和
+  // 状态栏里能看见地址 —— 一个"打开另一个页面"的菜单项本来就该是链接。
   ctx.innerHTML = items.map(it => it === '-' ? '<hr>' : it.head ? '<div class="hd">'+esc(it.head)+'</div>'
+    : it.href ? '<a href="'+esc(it.href)+'" target="_blank" rel="noopener">'+esc(it.label)+'</a>'
     : '<button '+(it.off?'disabled':'')+' data-i="'+(it.id||'')+'">'+esc(it.label)+
       (it.key?'<span class="k">'+it.key+'</span>':'')+'</button>').join('');
   ctx.classList.add('on');
@@ -408,6 +416,19 @@ function ctxAct(id){
       post('del', { username: row.dataset.user }); break;
   }
 }
+
+//  菜单。旧版后台的入口放在这儿 —— 真 macOS 的  菜单装的就是这类
+// "跟当前这个应用无关、属于整台机器"的东西,旧版入口正好是这种性质。
+$('#mbApple').addEventListener('click', e => {
+  e.stopPropagation();
+  const r = e.currentTarget.getBoundingClientRect();
+  ctxTarget = null;
+  menu([{head:'nodepipe 后台'},
+    {href: CLASSIC,      label:'打开旧版后台…'},
+    {href: BASE+'/tools', label:'打开工具箱…'}, '-',
+    {id:'wall',    label:'更改壁纸…'},
+    {id:'refreshall', label:'刷新全部', key:'⌘R'}], r.left - 6, 26);
+});
 
 // ---------- 开机 ----------
 paintWall();

@@ -13,9 +13,7 @@
 import { ADMIN_PATH } from "../config.ts";
 import { isAuthed } from "../auth.ts";
 import { runAction } from "../actions.ts";
-import { shellPage } from "../os/shell.ts";
 import { isApp, renderApp } from "../os/apps.ts";
-import { html } from "../ui.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -33,8 +31,9 @@ export async function handleOs(req: Request, url: URL): Promise<Response> {
 
   const rest = url.pathname.slice((ADMIN_PATH + "/os").length); // "" | "/app/xxx" | "/act"
 
-  // 外壳
-  if (rest === "" || rest === "/") return html(shellPage());
+  // 外壳现在由 {ADMIN_PATH} 直接给(见 routes/admin.ts)。这里只做个跳转,
+  // 让迁移期间存下 /os 书签的人不至于扑空 —— 外壳只有一处渲染,不留第二份。
+  if (rest === "" || rest === "/") return Response.redirect(new URL(ADMIN_PATH, url.origin), 302);
 
   // app 内容片段
   if (rest.startsWith("/app/") && req.method === "GET") {
