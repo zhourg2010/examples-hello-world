@@ -8,6 +8,7 @@
 // 那就不像操作系统,像每点一下就重启一次。提交完只重新拉受影响的那个 app 的片段。
 
 import { ADMIN_PATH } from "../config.ts";
+import { jsonForScript } from "../ui.ts";
 import { APP_ICONS, SQUIRCLE_DEF } from "./icons.ts";
 import { APPS } from "./apps.ts";
 
@@ -62,6 +63,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display"
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .win:not(.focus) .ttl{color:#a5a5aa}
 .body{flex:1;overflow:auto;padding:17px 19px;background:#fff;user-select:text}
+/* 深色外观的窗口(见 apps.ts 的 AppSpec.dark)。红黄绿灯保持原色不变 ——
+   macOS 的深色窗口也是这样,交通灯是系统统一的,不跟着应用主题走。 */
+.win.dark{background:#12151c}
+.win.dark .tbar{background:rgba(26,30,38,.94);border-bottom:.5px solid rgba(255,255,255,.08)}
+.win.dark .ttl{color:#e7e9ee}
+.win.dark:not(.focus) .ttl{color:#5b6070}
+.win.dark:not(.focus) .lt{background:#3a3f4b}
+.win.dark .body{background:#0d0f14;color:#e7e9ee}
+.win.dark .spin{color:#6b7280}
 .rsz{position:absolute;right:0;bottom:0;width:15px;height:15px;cursor:nwse-resize}
 .spin{padding:40px;text-align:center;color:#86868b;font-size:13px}
 
@@ -125,7 +135,7 @@ const WALLS = [
 ];
 
 export function shellPage(): string {
-  const meta = APPS.map((a) => ({ id: a.id, name: a.name, w: a.w, h: a.h }));
+  const meta = APPS.map((a) => ({ id: a.id, name: a.name, w: a.w, h: a.h, dark: !!a.dark }));
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>nodepipe</title>${STYLE}</head><body>
@@ -148,10 +158,10 @@ ${SQUIRCLE_DEF}
 <div class="ctx" id="ctx"></div>
 <div class="toasts" id="toasts"></div>
 <script>
-const BASE = ${JSON.stringify(ADMIN_PATH)};
-const APPS = ${JSON.stringify(meta)};
-const ICONS = ${JSON.stringify(APP_ICONS)};
-const WALLS = ${JSON.stringify(WALLS)};
+const BASE = ${jsonForScript(ADMIN_PATH)};
+const APPS = ${jsonForScript(meta)};
+const ICONS = ${jsonForScript(APP_ICONS)};
+const WALLS = ${jsonForScript(WALLS)};
 ${CLIENT_JS}
 </script></body></html>`;
 }
@@ -179,10 +189,27 @@ async function loadApp(id){
   if (!r.ok) return '<div class="spin">加载失败(' + r.status + ')</div>';
   return await r.text();
 }
+/**
+ * 把片段塞进窗口。**不能直接 innerHTML** —— 通过 innerHTML 插入的 <script>
+ * 浏览器一律不执行(DOM 规范如此),于是任何自带 JS 的 app 都是死的:
+ * 访问记录那两个联动下拉框就是这么变成空 <select> 的。
+ * 所以塞完之后要把每个 <script> 重新造一个真节点替换进去,这样才会跑。
+ */
+function setBody(w, htmlText){
+  const body = w.querySelector('.body');
+  body.innerHTML = htmlText;
+  body.querySelectorAll('script').forEach(old => {
+    const s = document.createElement('script');
+    // 属性照抄(比如 type),内容照搬
+    for (const a of old.attributes) s.setAttribute(a.name, a.value);
+    s.textContent = old.textContent;
+    old.replaceWith(s);
+  });
+}
 async function refresh(id){
   const w = wins[id];
   if (!w) return;
-  w.querySelector('.body').innerHTML = await loadApp(id);
+  setBody(w, await loadApp(id));
 }
 /** 变更操作:提交后只重拉受影响的窗口,不整页刷新 —— 窗口位置和其它窗口都保住。 */
 async function submit(form){
@@ -205,7 +232,7 @@ document.addEventListener('submit', e => {
 // ---------- 窗口 ----------
 async function make(app){
   const w = document.createElement('div');
-  w.className = 'win'; w.dataset.app = app.id;
+  w.className = 'win' + (app.dark ? ' dark' : ''); w.dataset.app = app.id;
   const n = Object.keys(wins).length;
   Object.assign(w.style, { left:(90+n*28)+'px', top:(62+n*26)+'px',
     width:app.w+'px', height:app.h+'px', zIndex:++z });
@@ -240,7 +267,7 @@ async function make(app){
     e.stopPropagation(); doWin(app.id, b.dataset.a);
   }));
   sync();
-  w.querySelector('.body').innerHTML = await loadApp(app.id);
+  setBody(w, await loadApp(app.id));
 }
 function doWin(id, a){
   const w = wins[id]; if (!w) return;
