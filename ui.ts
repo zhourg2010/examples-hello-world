@@ -14,6 +14,22 @@ export function escapeHtml(s: unknown): string {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 }
 
+/**
+ * 把数据嵌进 `<script>` 里时**必须**走这里,不能直接用 JSON.stringify。
+ *
+ * HTML 解析器在 <script> 内部只认一件事:字面量 `</script`。数据里只要出现这一串
+ * (比如访问日志里的 User-Agent —— 那是网络上任何人都能随手填的东西),脚本标签就
+ * 在那里被提前闭合,后面跟的内容当 HTML 解析,于是拿到后台页面上的任意脚本执行权。
+ * 转义掉 `<` 就断了这条路;JSON 里 `\u003c` 解析回来仍是 `<`,值本身一个字节都没变。
+ * 顺手也转 U+2028/U+2029:JSON 允许它们裸奔,而 JS 源码里它们是换行符。
+ */
+export function jsonForScript(v: unknown): string {
+  return JSON.stringify(v)
+    .replace(/</g, "\\u003c")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+}
+
 export function html(body: string, status = 200, extra: Record<string, string> = {}): Response {
   return new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8", ...extra } });
 }
@@ -722,7 +738,7 @@ export function dashboardPage(opts: {
     return n*mult;
   }
 
-  const INITIAL_NODES = ${JSON.stringify(nodes)};
+  const INITIAL_NODES = ${jsonForScript(nodes)};
   let nodeLines = decodeNodesBlob(INITIAL_NODES);
   let dirty = false;
   let sortCol = null, sortDir = 1;

@@ -8,6 +8,7 @@
 
 import { escapeHtml } from "../ui.ts";
 import { devicesApp } from "./apps/devices.ts";
+import { accessApp } from "./apps/access.ts";
 
 export interface AppSpec {
   id: string;
@@ -15,11 +16,18 @@ export interface AppSpec {
   /** 窗口默认宽高。用户拖过之后不记忆(刷新就回默认),先不做持久化。 */
   w: number;
   h: number;
+  /**
+   * 这个 app 的窗口用深色外观(连标题栏一起)。
+   * macOS 本来就允许单个应用固定深色(活动监视器、终端都是常见例子),
+   * 所以"深色窗口混在浅色桌面里"不违和 —— 反过来,把一块深色面板塞进白色窗口
+   * 才是真的怪。访问记录是个看监控的页面,深色更合适。
+   */
+  dark?: boolean;
 }
 
 export const APPS: AppSpec[] = [
   { id: "devices", name: "设备管理", w: 860, h: 460 },
-  { id: "access", name: "访问记录", w: 700, h: 460 },
+  { id: "access", name: "访问记录", w: 780, h: 500, dark: true },
   { id: "nodes", name: "节点内容", w: 680, h: 440 },
   { id: "free", name: "免费节点池", w: 720, h: 440 },
   { id: "backup", name: "备份", w: 540, h: 320 },
@@ -40,6 +48,7 @@ function placeholder(name: string, adminPath: string): string {
 
 export async function renderApp(id: string, origin: string, adminPath: string): Promise<string> {
   if (id === "devices") return await devicesApp(origin);
+  if (id === "access") return await accessApp(origin);
   const app = APPS.find((a) => a.id === id);
   return placeholder(app?.name ?? id, adminPath);
 }
