@@ -76,23 +76,22 @@ Clash Verge Rev 界面上那些"速度"是连接列表的实时流量显示,不�
 只能由脚本驱动内核实测(切 global 模式 → 逐个切节点下载 → 还原),串行、几分钟,
 期间本机出口节点会跟着变。默认是关的。细节见 [nodepipe/README.md](nodepipe/README.md#另一条数据源直接用本地-clash-verge-rev-的节点)。
 
-## 三、自定义客户端(`client/`)
+## 三、自定义客户端(rClash)
 
-`client/` 是 [Clash Verge Rev](https://github.com/clash-verge-rev/clash-verge-rev) v2.5.4 的源码
-副本,加了一个**「一键推送美国节点到 Deno」按钮**,位置就在代理页测延迟按钮旁边。
+**rClash 已经搬到独立仓库:[zhourg2010/rClash](https://github.com/zhourg2010/rClash)**
+(2026-08-27,用 `git subtree split` 抽出去的,历史都在)。本仓库里原来的 `client/` 目录和
+`.github/workflows/build-client.yml` 都已删除 —— 想翻旧代码的话,`git log -- client/` 还在。
 
-用法:先点测延迟 → 再点上传图标(第一次会弹设置,填 `/push` 地址和 `PUSH_KEY`;之后单击
-即推,右键改设置)。**有了它就不再需要本地端那套 subs-check 流程**——测速、筛选、推送
-全在客户端里完成,换电脑只要装这个包。
+它是 [Clash Verge Rev](https://github.com/clash-verge-rev/clash-verge-rev) v2.5.4 的源码副本,
+加了一个**「一键推送美国节点到 Deno」按钮**,位置就在代理页测延迟按钮旁边。用法:先点测延迟
+→ 再点上传图标(第一次会弹设置,填 `/push` 地址和 `PUSH_KEY`;之后单击即推,右键改设置)。
+**有了它就不再需要本地端那套 subs-check 流程** —— 测速、筛选、推送全在客户端里完成,
+换电脑只要装这个包。
 
-改动刻意做得很薄:**只碰了上游 1 个文件共 5 行**,其余全是新增文件,方便以后同步上游。
-来源、改动清单、同步上游的做法、构建方式都写在 [client/MODIFICATIONS.md](client/MODIFICATIONS.md)。
-
-> 该目录沿用上游的 **GPL-3.0-only** 许可证(见 `client/LICENSE`)。它与本仓库其余部分
-> (Deno 订阅服务)是同一仓库中相互独立的程序,属于聚合关系,不影响其余部分的许可。
-
-打 `client-v*` 的 tag 会由 `.github/workflows/build-client.yml` 自动构建
-macOS(Apple 芯片 / Intel)、Windows、Linux 四个包并发 Release。
+分出去的理由很实际:它是个 33MB 的 Tauri + Rust 项目,跟这边的 Deno 订阅服务在语言、
+工具链、构建时长(几十分钟 vs 几十秒)上没有一点重合,挤在一个仓库里只会互相添乱 ——
+`deno.json` 要专门 exclude 它,`check-deno.yml` 要专门排除它的路径,而它自己的构建又要
+到处写 `client/` 前缀。而且它是 GPL-3.0-only,跟本仓库其余部分许可证不同,分开也更清楚。
 
 ## 四、Deno 端
 

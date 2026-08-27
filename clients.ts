@@ -31,7 +31,7 @@ export interface ClientMeta {
 // key 必须跟 ua.ts 里 parseUa() 返回的 client 字段完全一致。
 export const CLIENTS: Record<string, ClientMeta> = {
   "Clash Verge Rev": {
-    what: "Clash 系里目前最主流的桌面客户端,界面现代、功能全。本仓库 client/ 目录下的自定义客户端就是基于它改的。",
+    what: "Clash 系里目前最主流的桌面客户端,界面现代、功能全。自用的 rClash 就是基于它改的(独立仓库 zhourg2010/rClash)。",
     platforms: "Windows / macOS / Linux",
     core: "mihomo(Clash.Meta)",
     openSource: true,

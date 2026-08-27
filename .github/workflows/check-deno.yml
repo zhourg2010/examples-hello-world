@@ -4,7 +4,9 @@
 # YAML 井号跑不起来)。而 Deno 这一侧是**家人真正在用**的链路 —— 订阅拉不到就是全家断网,
 # 更不该裸奔。这一轮跑完只要几十秒,基本不占额度。
 #
-# 只在 .ts 文件或本文件变动时触发;client/ 目录归 build-client.yml 管,这里排除掉。
+# 只在 .ts 文件或本文件变动时触发。
+# (客户端源码 2026-08-27 搬去 zhourg2010/rClash 独立仓库了,原来这里排除 client/**
+#  的两行一并去掉 —— 排除一个已经不存在的目录只会让人以为它还在。)
 
 name: 检查 Deno 服务
 
@@ -16,13 +18,11 @@ on:
       - '**.ts'
       - 'deno.json'
       - '.github/workflows/check-deno.yml'
-      - '!client/**'
   pull_request:
     paths:
       - '**.ts'
       - 'deno.json'
       - '.github/workflows/check-deno.yml'
-      - '!client/**'
   workflow_dispatch:
 
 concurrency:

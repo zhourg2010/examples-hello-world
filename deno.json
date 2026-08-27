@@ -7,9 +7,6 @@
   "imports": {
     "@std/http": "jsr:@std/http@1"
   },
-  // client/ 是 Tauri + Node 的项目(vendor 来的 Clash Verge Rev 源码),不归 Deno 管。
-  // 不排除的话 deno lint 会去 lint 那 288 个文件、报 385 个问题,CI 一加上就是红的。
-  "exclude": ["client/"],
   "lint": {
     "rules": {
       // main.ts / db.ts / free/store.ts 里的 jsr: 内联导入是本仓库既有的写法。
