@@ -52,7 +52,7 @@ Deno.serve(async (req: Request) => {
 
   // 接收本地测速推送
   if (path === "/push") {
-    return await handlePush(req);
+    return await handlePush(req, url);
   }
 
   // 服务总开关(PUSH_KEY 鉴权)。**故意不受开关影响** —— 关掉之后还得能开回来。
