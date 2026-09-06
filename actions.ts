@@ -8,8 +8,8 @@
 
 import { genId } from "./auth.ts";
 import {
-  addDevice, deleteDevice, importBackup, listDevices,
-  restorePrevNodes, saveNodes, setDevice,
+  addDevice, deleteDevice, getServiceState, importBackup, listDevices,
+  restorePrevNodes, saveNodes, setDevice, setServiceUp,
 } from "./kv.ts";
 import { DEFAULT_FORMAT, DEFAULT_FORMAT_TAGS } from "./formats.ts";
 import { sendMail } from "./mail.ts";
@@ -91,6 +91,19 @@ export async function runAction(action: string, f: FormData): Promise<ActionResu
       } catch (e) {
         return { ok: false, msg: "恢复失败:" + (e instanceof Error ? e.message : String(e)) };
       }
+    }
+
+    case "service": {
+      // 服务总开关。传 up=1 开、up=0 关;都不传就是**切换**(桌面版那个按钮用的)。
+      const raw = str("up");
+      const next = raw === "" ? !(await getServiceState()).up : raw === "1";
+      await setServiceUp(next);
+      // 两条都是 ok:true —— 操作本身成功了。曾经想用 ok:false 让"已关闭"这条显眼一点,
+      // 结果通知条上顶着"出错了"三个字,而根本没出错,纯属误导。
+      // "服务关着"这个状态由系统页上那块红底横幅长期提示,不该靠一条 3 秒就消失的通知。
+      return next
+        ? { ok: true, msg: "服务已开启,订阅链接恢复正常" }
+        : { ok: true, msg: "服务已关闭,所有订阅链接现在一律 404" };
     }
 
     case "testmail": {
