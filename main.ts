@@ -10,6 +10,7 @@ import { handleOs } from "./routes/os.ts";
 import { handleFallback } from "./routes/fallback.ts";
 import { handleTools } from "./routes/tools.ts";
 import { handlePush } from "./routes/push.ts";
+import { handleSwitch } from "./routes/switch.ts";
 import { handleFreeAdmin, handleFreePool } from "./routes/free.ts";
 import { harvestAll } from "./free/harvest.ts";
 import { freeStoreEnabled, prune } from "./free/store.ts";
@@ -52,6 +53,11 @@ Deno.serve(async (req: Request) => {
   // 接收本地测速推送
   if (path === "/push") {
     return await handlePush(req);
+  }
+
+  // 服务总开关(PUSH_KEY 鉴权)。**故意不受开关影响** —— 关掉之后还得能开回来。
+  if (path === "/switch") {
+    return await handleSwitch(req);
   }
 
   // 免费节点池:后台面板 + 手动抓取

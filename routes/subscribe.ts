@@ -9,13 +9,23 @@
 // 所以以前那条隐藏的 /us "美国节点组"链接已经没有存在意义,连同 /push-us、KV 里的
 // us_nodes、设备上的 usEnabled 开关一起整条链路都删掉了。
 
-import { appendLog, getDevice, getNodes, recordHit } from "../kv.ts";
+import { appendLog, getDevice, getNodes, getServiceState, recordHit } from "../kv.ts";
 import { maybeFlush } from "../db.ts";
 import { NODE_CAP } from "../config.ts";
 import { FORMATS, renderFormat } from "../formats.ts";
 import { capNodeCount, stripDisabled } from "../protocol-filter.ts";
 
 export async function handleSubscribe(parts: string[], req: Request): Promise<Response> {
+  // 服务总开关。关掉时**先**返回,在查设备之前 —— 这样"链接对不对"根本不参与判断,
+  // 对外的响应跟随便敲一个不存在的链接完全一样(同样的 404、同样的正文、同样没有
+  // 任何额外响应头),看不出这个域名上到底有没有服务。
+  //
+  // 关掉时也不记访问日志:日志的用途是"谁在用哪条链接",而这会儿谁也没拿到东西。
+  // 顺带也免得别人靠反复请求在你后台刷出一堆记录。
+  if (!(await getServiceState()).up) {
+    return new Response("Not Found", { status: 404 });
+  }
+
   // parts = ["l", username, id, clientTag?]
   const username = decodeURIComponent(parts[1]);
   const dev = await getDevice(username);

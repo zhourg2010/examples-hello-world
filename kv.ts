@@ -155,6 +155,36 @@ export async function claimQuarterFlag(quarter: string): Promise<boolean> {
   return r.ok;
 }
 
+// ---------- 服务开关(Up / Down) ----------
+//
+// 关掉之后订阅链接一律 404,**而且是跟"链接写错了"一模一样的 404** —— 从外面看不出
+// 这个域名上到底有没有服务,这就是它的全部意义。后台、/push、应急查码都不受影响:
+// 关了还能进后台把它开回来,rClash 也还能推节点。不然按一下 Down 就把自己锁在外面了。
+//
+// 只有一个 KV 键,没配过就是开着的 —— 老部署升上来行为不变,不会因为多了这个功能
+// 突然全家断网。
+
+const SERVICE_UP_KEY = ["service_up"];
+
+export interface ServiceState {
+  up: boolean;
+  /** 上次切换的时间戳。0 = 从来没切过(一直是默认的开) */
+  changedAt: number;
+}
+
+export async function getServiceState(): Promise<ServiceState> {
+  const v = (await kv.get<ServiceState>(SERVICE_UP_KEY)).value;
+  // 读不到就是开着。这个默认值是**故意**选的:KV 抽风或者键被误删的时候,
+  // 结果应该是"服务照常"而不是"全家断网"。
+  return v ?? { up: true, changedAt: 0 };
+}
+
+export async function setServiceUp(up: boolean): Promise<ServiceState> {
+  const next: ServiceState = { up, changedAt: Date.now() };
+  await kv.set(SERVICE_UP_KEY, next);
+  return next;
+}
+
 // ---------- 备份(功能2:导出/恢复) ----------
 export interface Backup {
   version: 1;
