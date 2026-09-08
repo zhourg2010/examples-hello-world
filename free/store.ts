@@ -76,6 +76,23 @@ async function ensureTables(): Promise<void> {
     err       TEXT NOT NULL DEFAULT ''
   )`;
   await sql`CREATE INDEX IF NOT EXISTS idx_free_harvest_ts ON free_harvest (ts DESC)`;
+  // 客户端实测回传的结果。**只留最近 CHECK_ROUNDS 轮**,见 saveChecks。
+  //
+  // 为什么按"轮"而不是按天数留:免费池是几千上万条,按天留的话跑得勤就爆、跑得少就
+  // 什么都没有;按轮留则不管你多久跑一次,表的行数上限恒定 = 池子大小 × 轮数。
+  //
+  // ON DELETE CASCADE:prune() 清掉很久没出现的节点时,它的验证记录跟着走,
+  // 不留一堆指向已经不存在的节点的孤儿行。
+  await sql`CREATE TABLE IF NOT EXISTS free_check (
+    uri_hash   TEXT NOT NULL REFERENCES free_node(uri_hash) ON DELETE CASCADE,
+    round      BIGINT NOT NULL,
+    ts         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ok         BOOLEAN NOT NULL,
+    latency_ms INTEGER,
+    err        TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (uri_hash, round)
+  )`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_free_check_round ON free_check (round DESC)`;
   ready = true;
 }
 
@@ -213,6 +230,89 @@ export async function poolStats(): Promise<PoolStats | null> {
   };
 }
 
+/**
+ * 保留多少轮验证结果。超过的整轮删掉。
+ *
+ * 定 7 是因为它足够看出趋势(一个节点是"一直好"还是"最近才坏"),又不至于让表
+ * 涨到需要操心的量级:池子上限约 16k 条,7 轮就是十来万行 —— 对 Postgres 是小表。
+ */
+export const CHECK_ROUNDS = 7;
+
+export interface CheckResult {
+  uriHash: string;
+  ok: boolean;
+  /** 通过时的延迟(毫秒)。不通就留空,**不要填 0** —— 0 会被当成"零延迟"参与排序 */
+  latencyMs?: number | null;
+  err?: string;
+}
+
+/**
+ * 存一轮验证结果,并把超过 CHECK_ROUNDS 轮的老数据整轮删掉。
+ *
+ * 轮号用 `max(round)+1`。这里假设**同时只有一轮在跑** —— 验证本身就是客户端串行
+ * 拨号,几千个节点跑一轮要很久,并发跑两轮没有意义。真撞上了,主键 (uri_hash, round)
+ * 会挡住重复写入而不是把两轮数据混成一轮。
+ */
+export async function saveChecks(
+  results: CheckResult[],
+): Promise<{ round: number; saved: number; prunedRounds: number }> {
+  if (!sql || results.length === 0) return { round: 0, saved: 0, prunedRounds: 0 };
+  await ensureTables();
+
+  const r = await sql`SELECT coalesce(max(round), 0)::int + 1 AS next FROM free_check`;
+  const round = r[0]?.next ?? 1;
+
+  let saved = 0;
+  for (let i = 0; i < results.length; i += CHUNK) {
+    const b = results.slice(i, i + CHUNK);
+    // 只写 free_node 里确实存在的那些 —— 客户端手里的池子可能比库里旧,
+    // 塞一个已经被 prune 掉的 uri_hash 会撞外键把整批打回。
+    const ins = await sql`
+      INSERT INTO free_check (uri_hash, round, ok, latency_ms, err)
+      SELECT t.h, ${round}::bigint, t.ok, t.ms, t.err
+      FROM unnest(
+        ${b.map((x) => x.uriHash)}::text[],
+        ${b.map((x) => x.ok)}::boolean[],
+        ${b.map((x) => (x.ok && x.latencyMs != null ? Math.round(x.latencyMs) : null))}::int[],
+        ${b.map((x) => (x.err ?? "").slice(0, 200))}::text[]
+      ) AS t(h, ok, ms, err)
+      WHERE EXISTS (SELECT 1 FROM free_node n WHERE n.uri_hash = t.h)
+      ON CONFLICT (uri_hash, round) DO NOTHING
+      RETURNING 1`;
+    saved += (ins as unknown[]).length;
+  }
+
+  // 整轮删。留 CHECK_ROUNDS 轮,包含刚写的这一轮。
+  const del = await sql`
+    WITH d AS (DELETE FROM free_check WHERE round <= ${round - CHECK_ROUNDS} RETURNING round)
+    SELECT count(DISTINCT round)::int AS n FROM d`;
+
+  return { round, saved, prunedRounds: del[0]?.n ?? 0 };
+}
+
+export interface CheckSummary {
+  /** 每轮一行,新的在前 */
+  rounds: Array<{ round: number; ts: string; total: number; ok: number; medianMs: number | null }>;
+  /** 最近一轮里通过的节点数 / 参与的节点数 */
+  latestRound: number;
+}
+
+/** 给后台看的:每轮的通过率。单条节点的结果跟着 getPool 一起出,见 getPoolWithChecks。 */
+export async function checkSummary(): Promise<CheckSummary | null> {
+  if (!sql) return null;
+  await ensureTables();
+  const rounds = await sql`
+    SELECT round::int AS round,
+           to_char(max(ts), 'MM-DD HH24:MI') AS ts,
+           count(*)::int AS total,
+           count(*) FILTER (WHERE ok)::int AS ok,
+           percentile_disc(0.5) WITHIN GROUP (ORDER BY latency_ms)
+             FILTER (WHERE ok AND latency_ms IS NOT NULL)::int AS "medianMs"
+    FROM free_check GROUP BY round ORDER BY round DESC`;
+  const rs = rounds as CheckSummary["rounds"];
+  return { rounds: rs, latestRound: rs[0]?.round ?? 0 };
+}
+
 /** 清掉很久没再出现的节点。免费源的节点寿命普遍很短,不清的话表会一直涨。 */
 export async function prune(keepDays = 30): Promise<number> {
   if (!sql) return 0;
@@ -221,5 +321,7 @@ export async function prune(keepDays = 30): Promise<number> {
     WITH d AS (DELETE FROM free_node WHERE last_seen < now() - (${keepDays}::int * interval '1 day') RETURNING 1)
     SELECT count(*)::int AS n FROM d`;
   await sql`DELETE FROM free_harvest WHERE ts < now() - interval '90 days'`;
+  // free_check 不用在这儿清:外键是 ON DELETE CASCADE,节点没了记录跟着没;
+  // 轮数上限由 saveChecks 每次写入时保证。
   return r[0]?.n ?? 0;
 }

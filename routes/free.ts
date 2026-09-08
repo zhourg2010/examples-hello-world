@@ -11,7 +11,15 @@
 
 import { isAuthed } from "../auth.ts";
 import { harvestAll } from "../free/harvest.ts";
-import { freeStoreEnabled, getPool, poolStats, prune } from "../free/store.ts";
+import {
+  type CheckResult,
+  CHECK_ROUNDS,
+  freeStoreEnabled,
+  getPool,
+  poolStats,
+  prune,
+  saveChecks,
+} from "../free/store.ts";
 import { freePanel } from "../free/ui.ts";
 
 const PUSH_KEY = Deno.env.get("PUSH_KEY") ?? "";
@@ -83,4 +91,78 @@ export async function handleFreePool(req: Request, url: URL): Promise<Response> 
     return new Response(btoa(text), { headers: { "content-type": "text/plain; charset=utf-8" } });
   }
   return new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } });
+}
+
+/**
+ * POST /free/verify —— 收客户端实测回来的一轮结果。
+ *
+ * Deno Deploy 上没有代理内核,拨不了节点,所以验证只能在客户端做(Spigot 把免费池
+ * 注入成一个 proxy-provider,用 mihomo 逐个 healthcheck),这里只负责存。
+ *
+ * 请求体:
+ *   { "results": [ { "uriHash": "...", "ok": true, "latencyMs": 240 },
+ *                  { "uriHash": "...", "ok": false, "err": "timeout" } ] }
+ *
+ * 轮号由服务端分配,客户端不用管。只保留最近 CHECK_ROUNDS 轮。
+ */
+export async function handleFreeVerify(req: Request): Promise<Response> {
+  const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+  if (!PUSH_KEY || token !== PUSH_KEY) return new Response("Unauthorized", { status: 401 });
+  if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+
+  // 先校验请求体,再看存储后端在不在。
+  // 400 是"你发的东西不对",503 是"我这边没配好" —— 前者优先。反过来的话,
+  // 调用方在没配 DATABASE_URL 的环境里永远只看到 503,看不出自己的格式还错着。
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "请求体不是合法 JSON" }, 400);
+  }
+
+  const raw = (body as { results?: unknown })?.results;
+  if (!Array.isArray(raw)) return json({ error: "缺少 results 数组" }, 400);
+  if (raw.length === 0) return json({ error: "results 是空的,没什么可存的" }, 400);
+  // 一轮最多这么多条。池子上限 5000,给一倍余量;再多多半是调用方写错了循环。
+  if (raw.length > 10000) return json({ error: `一次最多 10000 条,收到 ${raw.length}` }, 400);
+
+  const results: CheckResult[] = [];
+  for (const [i, item] of raw.entries()) {
+    const o = item as Record<string, unknown>;
+    const h = typeof o?.uriHash === "string" ? o.uriHash.trim() : "";
+    // uri_hash 是 SHA-256 的十六进制,64 位。形状不对就直接拒,别等外键去挡 ——
+    // 那样错误信息是一句 Postgres 的外键报错,看不出是第几条、错在哪。
+    if (!/^[0-9a-f]{64}$/.test(h)) {
+      return json({ error: `第 ${i} 条的 uriHash 不是 64 位十六进制:${JSON.stringify(o?.uriHash)}` }, 400);
+    }
+    if (typeof o.ok !== "boolean") {
+      return json({ error: `第 ${i} 条的 ok 必须是 true/false,收到 ${JSON.stringify(o.ok)}` }, 400);
+    }
+    const ms = o.latencyMs;
+    if (ms != null && (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0)) {
+      return json({ error: `第 ${i} 条的 latencyMs 不是非负数字:${JSON.stringify(ms)}` }, 400);
+    }
+    results.push({
+      uriHash: h,
+      ok: o.ok,
+      latencyMs: typeof ms === "number" ? ms : null,
+      err: typeof o.err === "string" ? o.err : "",
+    });
+  }
+
+  if (!freeStoreEnabled) {
+    return json({ error: "未配置 DATABASE_URL,免费池没有存储后端" }, 503);
+  }
+
+  const r = await saveChecks(results);
+  return json({
+    ok: true,
+    round: r.round,
+    received: results.length,
+    // saved 可能小于 received:库里已经没有的节点(被 prune 掉了)会被跳过
+    saved: r.saved,
+    skipped: results.length - r.saved,
+    prunedRounds: r.prunedRounds,
+    keepRounds: CHECK_ROUNDS,
+  });
 }
