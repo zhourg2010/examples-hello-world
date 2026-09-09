@@ -1,5 +1,5 @@
 // push_test.ts — GET /push 的往返性质。
-// 跑: deno test -A --unstable-kv push_test.ts
+// 跑: deno test -A push_test.ts
 //
 // 这个接口存在的唯一理由是"拉回来 → 排序/合并 → 再推回去"。所以要钉的不是
 // "能不能返回内容",而是**往返之后一个字节都不变**:
@@ -10,7 +10,11 @@
 import { getNodes, saveNodes } from "./kv.ts";
 import { handlePush } from "./routes/push.ts";
 
-const KEY = Deno.env.get("PUSH_KEY") ?? "";
+// 自己设一把钥匙,不指望环境里有。以前是从 env 读,CI 里没配 PUSH_KEY,
+// 于是这四条全是 401 —— 断言没有一条真的跑到,却还占着"测过了"的位置。
+// (鉴权是现读 env 的,见 auth.ts 的 isPushKeyed,所以这里设完立刻生效。)
+const KEY = "push-test-key";
+Deno.env.set("PUSH_KEY", KEY);
 const auth = { authorization: `Bearer ${KEY}` };
 const get = (q = "") =>
   handlePush(new Request(`http://x/push${q}`, { headers: auth }), new URL(`http://x/push${q}`));

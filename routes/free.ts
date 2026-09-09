@@ -3,17 +3,20 @@
 //   GET  {ADMIN_PATH}/free           后台面板:池子现状 + 各源战报 + 手动抓一轮的按钮
 //   POST {ADMIN_PATH}/free/harvest   手动触发一轮抓取(登录态鉴权)
 //   GET  /free/pool                  给本地实测端拉池子用(PUSH_KEY 鉴权)
+//   GET  /free/verify                最近几轮实测的通过率(PUSH_KEY 鉴权)
+//   POST /free/verify                收客户端实测回来的一轮结果(PUSH_KEY 鉴权)
 //
 // 为什么拉池子的接口要鉴权:池子里存的是完整的分享链接,含 uuid / 密码。虽然这些节点
 // 本来就是公开来源抓的,但把一个"聚合了几千条可用节点的接口"挂在公网上无鉴权,等于替
 // 别人做了个免费的聚合服务,白白消耗这些节点的带宽,也会让我们这个域名很快被盯上。
 // 复用 PUSH_KEY 而不是新开一个密钥:本地端本来就有它,不用再配一份。
 
-import { isAuthed } from "../auth.ts";
+import { isAuthed, isPushKeyed } from "../auth.ts";
 import { harvestAll } from "../free/harvest.ts";
 import {
   type CheckResult,
   CHECK_ROUNDS,
+  checkSummary,
   freeStoreEnabled,
   getPool,
   poolStats,
@@ -21,8 +24,6 @@ import {
   saveChecks,
 } from "../free/store.ts";
 import { freePanel } from "../free/ui.ts";
-
-const PUSH_KEY = Deno.env.get("PUSH_KEY") ?? "";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -66,8 +67,7 @@ export async function handleFreeAdmin(req: Request, url: URL): Promise<Response>
  *   format    uris(默认,每行一条分享链接) | base64(整段 base64,跟 /push 的格式一致) | json
  */
 export async function handleFreePool(req: Request, url: URL): Promise<Response> {
-  const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-  if (!PUSH_KEY || token !== PUSH_KEY) return new Response("Unauthorized", { status: 401 });
+  if (!isPushKeyed(req)) return new Response("Unauthorized", { status: 401 });
   if (!freeStoreEnabled) {
     return json({ error: "未配置 DATABASE_URL,免费池没有存储后端" }, 503);
   }
@@ -94,20 +94,32 @@ export async function handleFreePool(req: Request, url: URL): Promise<Response> 
 }
 
 /**
- * POST /free/verify —— 收客户端实测回来的一轮结果。
+ * /free/verify —— 客户端实测结果的收发口。
  *
- * Deno Deploy 上没有代理内核,拨不了节点,所以验证只能在客户端做(Spigot 把免费池
- * 注入成一个 proxy-provider,用 mihomo 逐个 healthcheck),这里只负责存。
+ * Deno Deploy 上没有代理内核,拨不了节点,所以验证只能在客户端做:Spigot 用池子里的
+ * 节点单独起一个 mihomo 探针进程(不碰用户自己那份配置),逐个 `/proxies/{name}/delay`,
+ * 测完把结果 POST 回这里。服务端只负责存和汇总。
  *
- * 请求体:
+ * POST 请求体:
  *   { "results": [ { "uriHash": "...", "ok": true, "latencyMs": 240 },
  *                  { "uriHash": "...", "ok": false, "err": "timeout" } ] }
  *
  * 轮号由服务端分配,客户端不用管。只保留最近 CHECK_ROUNDS 轮。
+ *
+ * GET 返回每轮的通过率(新的在前),给客户端界面显示"前几轮什么样",
+ * 不然用户每跑一轮只能看见这一轮的数字,看不出池子是在变好还是变差。
  */
 export async function handleFreeVerify(req: Request): Promise<Response> {
-  const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-  if (!PUSH_KEY || token !== PUSH_KEY) return new Response("Unauthorized", { status: 401 });
+  if (!isPushKeyed(req)) return new Response("Unauthorized", { status: 401 });
+
+  if (req.method === "GET") {
+    if (!freeStoreEnabled) {
+      return json({ error: "未配置 DATABASE_URL,免费池没有存储后端" }, 503);
+    }
+    const sum = await checkSummary();
+    return json({ keepRounds: CHECK_ROUNDS, ...(sum ?? { rounds: [], latestRound: 0 }) });
+  }
+
   if (req.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
 
   // 先校验请求体,再看存储后端在不在。

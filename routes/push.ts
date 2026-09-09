@@ -10,9 +10,9 @@
 // 把加工固化了(比如某条链接只发 vless,拉回去再推,别的协议就永久没了)。这里给的是
 // **原样**的池子,停用行也带着 #OFF# 前缀原样返回,一个字节不改。
 
+import { isPushKeyed } from "../auth.ts";
 import { getNodes, getNodesUpdated, saveNodes } from "../kv.ts";
 
-const PUSH_KEY = Deno.env.get("PUSH_KEY") ?? "";
 
 /** 把 KV 里存的那一坨(base64 或明文)还原成一行行的明文。 */
 function toLines(raw: string): string[] {
@@ -31,12 +31,7 @@ function toLines(raw: string): string[] {
 }
 
 export async function handlePush(req: Request, url?: URL): Promise<Response> {
-  // 鉴权:Authorization: Bearer <PUSH_KEY>
-  const auth = req.headers.get("authorization") ?? "";
-  const token = auth.replace(/^Bearer\s+/i, "").trim();
-  if (!PUSH_KEY || token !== PUSH_KEY) {
-    return new Response("Unauthorized", { status: 401 });
-  }
+  if (!isPushKeyed(req)) return new Response("Unauthorized", { status: 401 });
 
   // ---- 读回当前池子 ----
   if (req.method === "GET") {

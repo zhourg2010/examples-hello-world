@@ -1,9 +1,14 @@
 {
   "tasks": {
-    "dev": "deno run --watch --allow-read --allow-net --allow-env --unstable-kv main.ts",
+    "dev": "deno run --watch --allow-read --allow-net --allow-env main.ts",
     "check": "deno check main.ts free/*.ts routes/*.ts",
     "test": "deno test -A"
   },
+  // Deno.openKv() 还是 unstable API。写在这儿而不是每条命令后面加 --unstable-kv:
+  // 漏加的那条命令(比如 CI 里的 deno test)会在**加载 kv.ts 时**就炸,
+  // 报的是 "Deno.openKv is not a function",看不出只是少一个 flag。
+  "unstable": ["kv"],
+
   "imports": {
     "@std/http": "jsr:@std/http@1"
   },

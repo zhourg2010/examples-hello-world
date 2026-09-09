@@ -297,7 +297,7 @@ export interface CheckSummary {
   latestRound: number;
 }
 
-/** 给后台看的:每轮的通过率。单条节点的结果跟着 getPool 一起出,见 getPoolWithChecks。 */
+/** 每轮的通过率,新的在前。走 GET /free/verify 出去,给客户端界面显示历轮趋势。 */
 export async function checkSummary(): Promise<CheckSummary | null> {
   if (!sql) return null;
   await ensureTables();

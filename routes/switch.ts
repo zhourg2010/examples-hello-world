@@ -13,9 +13,9 @@
 // 没配 PUSH_KEY 时一律 401 —— 没有"没设密钥就放行"这种事,不然任何人都能把
 // 全家的订阅关掉。
 
+import { isPushKeyed } from "../auth.ts";
 import { getServiceState, setServiceUp } from "../kv.ts";
 
-const PUSH_KEY = Deno.env.get("PUSH_KEY") ?? "";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -25,10 +25,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 export async function handleSwitch(req: Request): Promise<Response> {
-  const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-  if (!PUSH_KEY || token !== PUSH_KEY) {
-    return new Response("Unauthorized", { status: 401 });
-  }
+  if (!isPushKeyed(req)) return new Response("Unauthorized", { status: 401 });
 
   if (req.method === "GET") {
     return json(await getServiceState());

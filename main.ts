@@ -70,8 +70,8 @@ Deno.serve(async (req: Request) => {
     return await handleFreePool(req, url);
   }
 
-  // 免费节点池:收客户端实测回来的一轮结果(PUSH_KEY 鉴权)。
-  // Deno Deploy 上没有代理内核、拨不了节点,所以验证只能在客户端做,这里只负责存。
+  // 免费节点池:GET 拿历轮通过率,POST 收客户端实测回来的一轮结果(都是 PUSH_KEY 鉴权)。
+  // Deno Deploy 上没有代理内核、拨不了节点,所以验证只能在客户端做,这里只负责存和汇总。
   if (path === "/free/verify") {
     return await handleFreeVerify(req);
   }

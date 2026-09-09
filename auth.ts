@@ -46,6 +46,21 @@ export async function isAuthed(req: Request): Promise<boolean> {
   return auth ? await isValidCode(auth) : false;
 }
 
+/**
+ * PUSH_KEY 鉴权(Authorization: Bearer <PUSH_KEY>)。/push、/switch、/free/* 共用一把钥匙。
+ *
+ * **没配 PUSH_KEY 时一律不通过** —— 没有"没设密钥就放行"这种事,不然任何人都能改节点池。
+ *
+ * 每次现读环境变量,而不是在模块加载时定死:定死的话测试里"设好 env 再 import"就晚了
+ * (模块已经求值过),表现是断言明明写对了、跑出来全是 401,而且看不出为什么。
+ * 线上 env 在启动前就位,现读一次是个 map 查找,没有代价。
+ */
+export function isPushKeyed(req: Request): boolean {
+  const key = Deno.env.get("PUSH_KEY") ?? "";
+  const token = (req.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+  return !!key && token === key;
+}
+
 // 生成 10 位随机数字 id
 export function genId(): string {
   const b = new Uint8Array(10);
