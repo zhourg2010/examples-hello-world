@@ -11,7 +11,7 @@ import { handleFallback } from "./routes/fallback.ts";
 import { handleTools } from "./routes/tools.ts";
 import { handlePush } from "./routes/push.ts";
 import { handleSwitch } from "./routes/switch.ts";
-import { handleFreeAdmin, handleFreePool } from "./routes/free.ts";
+import { handleFreeAdmin, handleFreePool, handleFreeVerify } from "./routes/free.ts";
 import { harvestAll } from "./free/harvest.ts";
 import { freeStoreEnabled, prune } from "./free/store.ts";
 
@@ -68,6 +68,12 @@ Deno.serve(async (req: Request) => {
   // 免费节点池:给本地实测端拉候选(PUSH_KEY 鉴权)
   if (path === "/free/pool") {
     return await handleFreePool(req, url);
+  }
+
+  // 免费节点池:收客户端实测回来的一轮结果(PUSH_KEY 鉴权)。
+  // Deno Deploy 上没有代理内核、拨不了节点,所以验证只能在客户端做,这里只负责存。
+  if (path === "/free/verify") {
+    return await handleFreeVerify(req);
   }
 
   // 其他:默认网页

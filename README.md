@@ -76,15 +76,20 @@ Clash Verge Rev 界面上那些"速度"是连接列表的实时流量显示,不�
 只能由脚本驱动内核实测(切 global 模式 → 逐个切节点下载 → 还原),串行、几分钟,
 期间本机出口节点会跟着变。默认是关的。细节见 [nodepipe/README.md](nodepipe/README.md#另一条数据源直接用本地-clash-verge-rev-的节点)。
 
-## 三、自定义客户端(rClash)
+## 三、自定义客户端(Spigot)
 
-**rClash 已经搬到独立仓库:[zhourg2010/rClash](https://github.com/zhourg2010/rClash)**
+**已经搬到独立仓库:[zhourg2010/Spigot](https://github.com/zhourg2010/Spigot)**
 (2026-08-27,用 `git subtree split` 抽出去的,历史都在)。本仓库里原来的 `client/` 目录和
 `.github/workflows/build-client.yml` 都已删除 —— 想翻旧代码的话,`git log -- client/` 还在。
 
+(它一开始叫 rClash,2026-09 改名为 Spigot —— 名字里带 "Clash" 既容易被当成上游的官方分支,
+在一台已经装着 Clash Verge Rev 的机器上也分不出谁是谁。Spigot = 水龙头:节点从这儿流向
+订阅服务,而那个 404 开关就是把阀门拧上。)
+
 它是 [Clash Verge Rev](https://github.com/clash-verge-rev/clash-verge-rev) v2.5.4 的源码副本,
-加了一个**「一键推送美国节点到 Deno」按钮**,位置就在代理页测延迟按钮旁边。用法:先点测延迟
-→ 再点上传图标(第一次会弹设置,填 `/push` 地址和 `PUSH_KEY`;之后单击即推,右键改设置)。
+左边导航栏最下面多了一页 **Deno Push**:列出内核当前加载的全部节点,可以按名称 / 域名 / IP /
+国家 / 协议过滤,测对 claude / gpt / gemini 的可达性,挑一批推给本服务,还能一键让订阅服务
+装死(所有链接返回 404)。推送地址和密钥在**设置页**的「Deno Push」一节。
 **有了它就不再需要本地端那套 subs-check 流程** —— 测速、筛选、推送全在客户端里完成,
 换电脑只要装这个包。
 
